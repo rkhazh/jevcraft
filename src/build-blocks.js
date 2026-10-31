@@ -2,6 +2,8 @@
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const { isDoor, doorPairMatches } = require('./doors');
+const isBed = name => typeof name === 'string' && name.endsWith('_bed');
+const bedDirections = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] };
 const opposite = { north: 'south', south: 'north', east: 'west', west: 'east' };
 const directions = [new Vec3(0, -1, 0), new Vec3(0, 1, 0), new Vec3(0, 0, -1), new Vec3(0, 0, 1), new Vec3(-1, 0, 0), new Vec3(1, 0, 0)];
 
@@ -13,6 +15,11 @@ function regionProperties(material, value) {
   const properties = Object.fromEntries(Object.entries(value || {}).filter(([, v]) => v !== null));
   if (Object.keys(value || {}).some(k => !['facing', 'half'].includes(k))) throw new Error('unsupported block property');
   const stair = material.endsWith('_stairs'), slab = material.endsWith('_slab');
+  if (isBed(material)) {
+    if (!Object.hasOwn(opposite, properties.facing)) throw new Error(`${material} needs a cardinal facing`);
+    if (properties.half !== undefined) throw new Error('bed regions specify the foot position; half must be null');
+    return { facing: properties.facing, part: 'foot' };
+  }
   if (isDoor(material)) {
     if (!Object.hasOwn(opposite, properties.facing)) throw new Error(`${material} needs a cardinal facing`);
     if (properties.half !== undefined) throw new Error('door regions specify the bottom position; half must be null');
@@ -35,6 +42,10 @@ function matchesBuildBlock(block, cell) {
 }
 
 function buildFootprint(cell) {
+  if (isBed(cell.material) && cell.properties?.part === 'foot') {
+    const [dx, dz] = bedDirections[cell.properties.facing];
+    return [cell, { ...cell, x: cell.x + dx, z: cell.z + dz, companion: true, properties: { ...cell.properties, part: 'head' } }];
+  }
   return isDoor(cell.material) && cell.properties?.half === 'lower' ? [cell,
     { ...cell, y: cell.y + 1, companion: true, properties: { ...cell.properties, half: 'upper' } }] : [cell];
 }
@@ -54,13 +65,30 @@ function enclosedCell(bot, cell) {
   return directions.every(face => bot.blockAt(p.plus(face))?.boundingBox === 'block');
 }
 
+function bedPairMatches(foot, head) {
+  if (!foot || !head || !isBed(foot.name) || foot.name !== head.name) return false;
+  const a = foot.getProperties?.() || {}, b = head.getProperties?.() || {};
+  return a.part === 'foot' && b.part === 'head' && Object.hasOwn(bedDirections, a.facing) && a.facing === b.facing;
+}
+
 function buildCellComplete(bot, cell) {
+  // Objective diagnostics inspect every schematic cell, including companions.
+  // A head is complete only when its owning foot and both orientations agree.
+  if (isBed(cell.material) && cell.properties?.part === 'head') {
+    const [dx, dz] = bedDirections[cell.properties.facing];
+    return buildCellComplete(bot, { ...cell, x: cell.x - dx, z: cell.z - dz, companion: false, properties: { ...cell.properties, part: 'foot' } });
+  }
   const parts = buildFootprint(cell), observed = parts.map(p => bot.blockAt(new Vec3(p.x, p.y, p.z)));
+  if (isBed(cell.material)) return parts.length === 2 && parts.every((p, i) => matchesBuildBlock(observed[i], p)) && bedPairMatches(...observed);
   if (parts.every((p, i) => matchesBuildBlock(observed[i], p)) && (parts.length === 1 || doorPairMatches(...observed))) return true;
   return parts.every(p => enclosedCell(bot, p));
 }
 
 function blockOwnership(block) {
+  if (isBed(block.name)) {
+    const p = block.getProperties?.() || {};
+    return { stateId: block.stateId, name: block.name, properties: { facing: p.facing, part: p.part } };
+  }
   if (!isDoor(block.name)) return block.stateId ?? block.name;
   const p = block.getProperties();
   // Opening a door or powering it is normal use, not replacement of the bot's
@@ -75,7 +103,7 @@ function matchesOwnership(block, owned) {
 
 function placementGoal(bot, point, cell = {}) {
   const p = new Vec3(point.x, point.y, point.z), state = cell.properties || {};
-  if (isDoor(cell.material)) return new goals.GoalPlaceBlock(p, bot.world, { range: 4.25, facing: opposite[state.facing], faces: [new Vec3(0, -1, 0)] });
+  if (isDoor(cell.material) || isBed(cell.material)) return new goals.GoalPlaceBlock(p, bot.world, { range: 4.25, facing: opposite[state.facing], faces: [new Vec3(0, -1, 0)] });
   const half = state.half || state.type;
   // GoalPlaceBlock's facing means the face toward the player, opposite the
   // player's horizontal look direction used by Minecraft for stairs.
@@ -103,4 +131,4 @@ function placementGoal(bot, point, cell = {}) {
   return goal;
 }
 
-module.exports = { regionProperties, matchesBuildBlock, placementGoal, buildFootprint, buildCellComplete, enclosedCell, blockOwnership, matchesOwnership };
+module.exports = { isBed, bedPairMatches, regionProperties, matchesBuildBlock, placementGoal, buildFootprint, buildCellComplete, enclosedCell, blockOwnership, matchesOwnership };
