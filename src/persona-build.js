@@ -20,7 +20,7 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  if(spec.mode!=='fresh') {
   if(!entry||entry.from!==principal||dimension(entry.dimension)!==dimension(bot.game?.dimension))fail('unknown or unowned structure');
   const distance=Math.hypot(entry.origin.x-anchor.x,entry.origin.y-anchor.y,entry.origin.z-anchor.z);
-  if(distance>512)fail('structure out of reach');
+  if(distance>1024)fail('structure out of reach');
   base.personaBuildPolicy.anchor={...entry.origin};
   if(distance>8)base.personaBuildReturn={target:{...(entry.entrance||entry.origin)},entryId:entry.id};
  }
@@ -40,12 +40,23 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  if(!base.personaBuildReturn)verifiedEditOwnership(bot,entry);
  return {...base,design,buildId:entry.id,buildAnchor:{...entry.origin},buildContinuation:{mode:'edit',target:entry.id,name:entry.name,placement:'beside_target'}};
 }
+// Retention is evidence of unchanged original terrain, never permission to
+// substitute an arbitrary block or to skip visible/oriented construction.
+function retainedOriginalFoundation(bot,bp,cell,block) {
+ const key=`${cell.x},${cell.y},${cell.z}`;
+ if(!Number.isFinite(bp.origin?.y)||cell.y>bp.origin.y||Object.keys(cell.properties||{}).length||/_bed$|_door$/.test(cell.material))return false;
+ if(!block||! /^(dirt|grass_block|coarse_dirt|rooted_dirt|podzol|stone|deepslate|granite|diorite|andesite|tuff|sandstone|red_sandstone|terracotta)$/.test(block.name))return false;
+ if(bp.initialNames?.[key]!==block.name||bp.initialBlocks?.[key]===undefined||bp.initialBlocks[key] !== (block.stateId??block.name))return false;
+ const origin=new Vec3(cell.x,cell.y,cell.z);
+ return [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].every(([x,y,z])=>bot.blockAt(origin.offset(x,y,z))?.boundingBox==='block');
+}
 function verifiedEditOwnership(bot,entry) {
  const owned=new Set();
  for(const cell of entry?.blueprint?.blocks||[]) {
   const key=`${cell.x},${cell.y},${cell.z}`,block=bot.blockAt(new Vec3(cell.x,cell.y,cell.z));
   if(!block)fail('edit needs loaded structure blocks');
   if(['air','cave_air','void_air'].includes(block.name))continue;
+  if(retainedOriginalFoundation(bot,entry.blueprint,cell,block))continue;
   if(!matchesBuildBlock(block,cell)&&!matchesOwnership(block,entry.buildOwned?.[key]))fail('structure changed by another builder');
   owned.add(key);
  }
@@ -63,7 +74,7 @@ function assertBuildPolicy(goal) {
  if(cells.length>14000||cells.some(p=>![p.x,p.y,p.z].every(Number.isFinite)||Math.hypot(p.x-anchor.x,p.y-anchor.y,p.z-anchor.z)>64))fail('site exceeds admitted radius');
 }
 function buildVerification(bot,goal) {
- const report={verified:false,matched_blocks:0,mismatched_blocks:0,unknown_blocks:0,blocked_empty:0,samples:[]};
+ const report={verified:false,exact_material_match:false,matched_blocks:0,retained_blocks:0,retained_enclosed_natural:[],mismatched_blocks:0,unknown_blocks:0,blocked_empty:0,samples:[]};
  try{
   assertBuildPolicy(goal);const bp=goal.blueprint;if(!bp?.blocks?.length||bp.blocks.length>LIMITS.max_blocks)return report;
   const sample=(p,expected,observed)=>{if(report.samples.length<5)report.samples.push({position:{x:p.x,y:p.y,z:p.z},expected,observed});};
@@ -72,6 +83,7 @@ function buildVerification(bot,goal) {
    const block=bot.blockAt(new Vec3(cell.x,cell.y,cell.z));
    if(!block){report.unknown_blocks++;sample(cell,cell.material,'unloaded');}
    else if(matchesBuildBlock(block,cell))report.matched_blocks++;
+   else if(retainedOriginalFoundation(bot,bp,cell,block)){report.retained_blocks++;if(report.retained_enclosed_natural.length<8)report.retained_enclosed_natural.push({position:{x:cell.x,y:cell.y,z:cell.z},requested:cell.material,observed:block.name});}
    else{report.mismatched_blocks++;sample(cell,cell.material,String(block.name).slice(0,64));}
   }
   for(const p of bp.empty||[]){const block=bot.blockAt(new Vec3(p.x,p.y,p.z));
@@ -79,6 +91,7 @@ function buildVerification(bot,goal) {
    else if(!['air','cave_air','void_air'].includes(block.name)){report.blocked_empty++;sample(p,'air',String(block.name).slice(0,64));}
   }
   report.verified=!report.mismatched_blocks&&!report.unknown_blocks&&!report.blocked_empty;
+  report.exact_material_match=report.verified&&report.retained_blocks===0;
  }catch(_){report.policy_error=true;}
  return report;
 }

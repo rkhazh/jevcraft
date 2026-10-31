@@ -41,3 +41,14 @@ test('owned continuation returns to registered structure without model coordinat
  const goal=prepareBuild(bot,{mode:'edit',build_id:'b',schematic:{...schematic(),existingOffset:[0,0,0]}},'persona:p',{enabled:true});
  assert.deepEqual(goal.personaBuildReturn.target,entries[0].entrance);assert.deepEqual(goal.personaBuildPolicy.anchor,entries[0].origin);
 });
+test('verification records only unchanged enclosed original natural foundation as retained',()=>{
+ const {buildVerification,verifiedEditOwnership}=require('../src/persona-build');
+ const cell={x:0,y:65,z:0,material:'cobblestone'};
+ const blueprint={origin:{x:0,y:65,z:0},blocks:[cell],empty:[],initialNames:{'0,65,0':'dirt'},initialBlocks:{'0,65,0':10}};
+ const bot={blockAt:p=>p.x===0&&p.y===65&&p.z===0?{name:'dirt',stateId:10,boundingBox:'block'}:{name:'stone',stateId:1,boundingBox:'block'}};
+ const report=buildVerification(bot,{blueprint});assert.equal(report.verified,true);assert.equal(report.exact_material_match,false);assert.equal(report.retained_blocks,1);assert.equal(report.retained_enclosed_natural[0].observed,'dirt');assert.equal(verifiedEditOwnership(bot,{blueprint}).size,0);
+ for(const change of [{name:'diamond_block',stateId:10},{name:'dirt',stateId:11}]){const original=bot.blockAt;bot.blockAt=p=>p.x===0&&p.y===65&&p.z===0?{...change,boundingBox:'block'}:original(p);assert.equal(buildVerification(bot,{blueprint}).verified,false);bot.blockAt=original;}
+ const original=bot.blockAt;bot.blockAt=p=>p.x===1?null:original(p);assert.equal(buildVerification(bot,{blueprint}).verified,false);bot.blockAt=original;
+ cell.properties={facing:'north'};assert.equal(buildVerification(bot,{blueprint}).verified,false);delete cell.properties;
+ blueprint.origin.y=64;assert.equal(buildVerification(bot,{blueprint}).verified,false);
+});

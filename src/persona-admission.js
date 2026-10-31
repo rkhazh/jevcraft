@@ -80,7 +80,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
     if(!verified)status='failed';
    }
    if(!['complete','blocked','failed'].includes(status))return;
-   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,...(goal?.buildId?{build_id:goal.buildId}:{}),...(goal?.personaBuildVerification?{build_verification:goal.personaBuildVerification}:{}),summary:verified?(s.kind==='build'?`Verified all planned structure blocks and clear cells for ${goal.buildId}`:s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}`});
+   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,...(goal?.buildId?{build_id:goal.buildId}:{}),...(goal?.personaBuildVerification?{build_verification:goal.personaBuildVerification}:{}),summary:verified?(s.kind==='build'?(goal.personaBuildVerification?.retained_blocks?`Verified structure ${goal.buildId} with ${goal.personaBuildVerification.retained_blocks} observed retained enclosed original natural foundation cells; not an exact material match`:`Verified all planned structure blocks and clear cells for ${goal.buildId}`):s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}`});
   },
   close:()=>{closed=true;return enqueue(async()=>{if(active)await cancelNow(active.proposal.goal_id,'cancelled');});},
  };
