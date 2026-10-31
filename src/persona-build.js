@@ -42,11 +42,15 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
 }
 // Retention is evidence of unchanged original terrain, never permission to
 // substitute an arbitrary block or to skip visible/oriented construction.
-function retainedOriginalFoundation(bot,bp,cell,block) {
+function unchangedOriginalFoundation(bp,cell,block) {
  const key=`${cell.x},${cell.y},${cell.z}`;
  if(!Number.isFinite(bp.origin?.y)||cell.y>bp.origin.y||Object.keys(cell.properties||{}).length||/_bed$|_door$/.test(cell.material))return false;
  if(!block||! /^(dirt|grass_block|coarse_dirt|rooted_dirt|podzol|stone|deepslate|granite|diorite|andesite|tuff|sandstone|red_sandstone|terracotta)$/.test(block.name))return false;
  if(bp.initialNames?.[key]!==block.name||bp.initialBlocks?.[key]===undefined||bp.initialBlocks[key] !== (block.stateId??block.name))return false;
+ return true;
+}
+function retainedOriginalFoundation(bot,bp,cell,block) {
+ if(!unchangedOriginalFoundation(bp,cell,block))return false;
  const origin=new Vec3(cell.x,cell.y,cell.z);
  return [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].every(([x,y,z])=>bot.blockAt(origin.offset(x,y,z))?.boundingBox==='block');
 }
@@ -56,7 +60,9 @@ function verifiedEditOwnership(bot,entry) {
   const key=`${cell.x},${cell.y},${cell.z}`,block=bot.blockAt(new Vec3(cell.x,cell.y,cell.z));
   if(!block)fail('edit needs loaded structure blocks');
   if(['air','cave_air','void_air'].includes(block.name))continue;
-  if(retainedOriginalFoundation(bot,entry.blueprint,cell,block))continue;
+  // An approach may expose original terrain. It is still original ground,
+  // not another builder's replacement; enclosure belongs only to completion.
+  if(unchangedOriginalFoundation(entry.blueprint,cell,block))continue;
   if(!matchesBuildBlock(block,cell)&&!matchesOwnership(block,entry.buildOwned?.[key]))fail('structure changed by another builder');
   owned.add(key);
  }

@@ -52,3 +52,12 @@ test('verification records only unchanged enclosed original natural foundation a
  cell.properties={facing:'north'};assert.equal(buildVerification(bot,{blueprint}).verified,false);delete cell.properties;
  blueprint.origin.y=64;assert.equal(buildVerification(bot,{blueprint}).verified,false);
 });
+test('editing unchanged original natural ground does not require completed enclosure',()=>{
+ const {verifiedEditOwnership,buildVerification}=require('../src/persona-build');
+ const cell={x:0,y:65,z:0,material:'cobblestone'},blueprint={origin:{x:0,y:65,z:0},blocks:[cell],empty:[],initialNames:{'0,65,0':'dirt'},initialBlocks:{'0,65,0':10}};
+ const bot={blockAt:p=>p.x===0&&p.y===65&&p.z===0?{name:'dirt',stateId:10,boundingBox:'block'}:{name:'air',stateId:0,boundingBox:'empty'}};
+ assert.equal(verifiedEditOwnership(bot,{blueprint}).size,0,'original natural ground is terrain, not an owned placed block');
+ assert.equal(buildVerification(bot,{blueprint}).verified,false,'exposed ground cannot prove completed foundation');
+ bot.blockAt=()=>({name:'dirt',stateId:11,boundingBox:'block'});assert.throws(()=>verifiedEditOwnership(bot,{blueprint}));
+ bot.blockAt=()=>({name:'diamond_block',stateId:10,boundingBox:'block'});assert.throws(()=>verifiedEditOwnership(bot,{blueprint}));
+});
