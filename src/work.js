@@ -4959,7 +4959,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     goal.design = entry.design || goal.design;
     goal.blueprint = structuredClone(entry.blueprint);
     // Finishing owns nothing of the neighbours: their cells are theirs.
-    goal.buildOwned = { ...goal.buildOwned };
+    goal.buildOwned = { ...entry.buildOwned, ...bot.buildRegistry.ownership(bot, entry.blueprint.bounds, dimensionName(bot), undefined, {only:entry.id}), ...goal.buildOwned };
     goal.step = { action: goal.continueBuild.mode === 'repair' ? 'repair_building' : 'finish_building', building: entry.name };
     save(); onStep(goal);
     bot.chat(goal.continueBuild.mode === 'repair' ? `I'll check ${entry.name} over and put back anything missing.`
@@ -5073,7 +5073,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     // together, so its choice of spot is tried first. It is a suggestion, not
     // an instruction: a player's "here" still wins, and code searches on its
     // own if the ground does not turn out to hold the building.
-    const owned = registry?.claimed(dimensionName(bot), edited ? undefined : goal.buildId);
+    const owned = goal.personaBuildPolicy && edited ? require('./persona-build').verifiedEditOwnership(bot,edited) : registry?.claimed(dimensionName(bot), edited ? undefined : goal.buildId);
     // Everything Jev built except the building being changed stays standing.
     const protect = registry?.claimed(dimensionName(bot), edited ? edited.id : goal.buildId);
     const here = bot.entity.position.floored();

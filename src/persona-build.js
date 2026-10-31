@@ -1,7 +1,7 @@
 'use strict';
 const {Vec3}=require('vec3');
 const {validateSchematic,buildPalette}=require('./designer');
-const {matchesBuildBlock,buildFootprint}=require('./build-blocks');
+const {matchesBuildBlock,buildFootprint,matchesOwnership}=require('./build-blocks');
 const LIMITS=Object.freeze({max_blocks:1024,max_size:[24,16,24],max_regions:64});
 const dimension=value=>String(value||'').replace(/^minecraft:/,'');
 function fail(message){throw Object.assign(new Error(`Persona build: ${message}`),{name:'PersonaBuildPolicy'});}
@@ -25,7 +25,7 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
   if(spec.schematic!==null||!entry?.design?.source)fail('continuation needs saved design');
   const design=validate(entry.design.source,bot.registry);
   assertBuildPolicy({...base,design,blueprint:entry.blueprint});
-  return {...base,continueBuild:{id:entry.id,mode:spec.mode}};
+  return {...base,buildOwned:structuredClone(entry.buildOwned||{}),continueBuild:{id:entry.id,mode:spec.mode}};
  }
  if(!['fresh','edit'].includes(spec.mode))fail('unsupported mode');
  const design=validate(spec.schematic,bot.registry);
@@ -34,7 +34,19 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
   return {...base,design};
  }
  if(!design.existingOffset)fail('edit must align existing structure');
+ verifiedEditOwnership(bot,entry);
  return {...base,design,buildId:entry.id,buildAnchor:{...entry.origin},buildContinuation:{mode:'edit',target:entry.id,name:entry.name,placement:'beside_target'}};
+}
+function verifiedEditOwnership(bot,entry) {
+ const owned=new Set();
+ for(const cell of entry?.blueprint?.blocks||[]) {
+  const key=`${cell.x},${cell.y},${cell.z}`,block=bot.blockAt(new Vec3(cell.x,cell.y,cell.z));
+  if(!block)fail('edit needs loaded structure blocks');
+  if(['air','cave_air','void_air'].includes(block.name))continue;
+  if(!matchesBuildBlock(block,cell)&&!matchesOwnership(block,entry.buildOwned?.[key]))fail('structure changed by another builder');
+  owned.add(key);
+ }
+ return owned;
 }
 function assertBuildPolicy(goal) {
  if(!goal.personaBuildPolicy)return;
@@ -63,4 +75,4 @@ function describeBuilds(bot) {
   block_count:entry.blueprint?.blocks?.length||0,...(index===0&&entry.design?.source&&Buffer.byteLength(JSON.stringify(entry.design.source))<=24000?{schematic:entry.design.source}:{}),
  }));
 }
-module.exports={LIMITS,prepareBuild,assertBuildPolicy,verifyBuild,capabilities,describeBuilds};
+module.exports={LIMITS,prepareBuild,assertBuildPolicy,verifyBuild,capabilities,describeBuilds,verifiedEditOwnership};

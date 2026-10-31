@@ -184,6 +184,11 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // world rather than the request and is shared by every later build.
   const builds = new BuildRegistry(path.join(stateDirectory, `${memoryIdentity}-builds.json`));
   bot.buildRegistry = builds;
+  // The goal store checkpoints placements during a lease. Recover that proof
+  // after an interrupted process without resuming the expired goal itself.
+  if (externalPersona && memorySeed?.personaGoalId && memorySeed.buildId && memorySeed.buildOwned && builds.find(memorySeed.buildId)) {
+    builds.find(memorySeed.buildId).buildOwned=structuredClone(memorySeed.buildOwned);builds.flush();
+  }
   // The dream: what the bot works toward when nobody has asked for
   // anything. Kept per world, beside the builds it produces.
   const dreamStore = new GoalStore(path.join(stateDirectory, `${memoryIdentity}-dream.json`));
@@ -311,6 +316,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         console.error(err); bot.chat(`${friendlyProblem(err)} ${recoveryHint(err)}`);
       }
     }).finally(() => {
+      if (!ended && goal.personaGoalId && goal.kind==='build' && goal.blueprint?.bounds) builds.remember(goal,{dimension:bot.game?.dimension,status:goal.status==='complete'?'complete':'unfinished'});
       if (active === session) active = null;
       if (session.relaunch) {
         relaunching = true;
@@ -816,7 +822,9 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       const running = active;
       if (!running || (id && running.goal.personaGoalId !== id)) return;
       running.task.cancel();
-      if (!running.idle) { running.goal.status=status; store.save(running.goal); store.flushSync(); }
+      if (!running.idle) { running.goal.status=status; store.save(running.goal); store.flushSync();
+        if(running.goal.kind==='build'&&running.goal.blueprint?.bounds)builds.remember(running.goal,{dimension:bot.game?.dimension,status:'unfinished'});
+      }
       bot.pathfinder.setGoal(null); bot.clearControlStates(); bot.stopDigging(); bot.deactivateItem();
       let timer;
       const timeout = new Promise((_, reject)=>{timer=setTimeout(()=>reject(new Error('Persona cancellation timed out')),2000);});

@@ -24,3 +24,15 @@ test('completion verifies every block and empty cell; policy refuses oversized t
  goal.blueprint.terrain={clear:Array.from({length:2049},()=>({x:0,y:0,z:0})),fill:[]};assert.throws(()=>assertBuildPolicy(goal));
  assert.deepEqual(describeBuilds(bot),[]);
 });
+test('edits refuse external replacement and continuation retains recorded ownership',()=>{
+ const {bot,entries}=fixture();const blueprint={origin:{x:0,y:65,z:0},bounds:{min:{x:0,y:65,z:0},max:{x:2,y:66,z:2}},blocks:[{x:0,y:65,z:0,material:'oak_planks'}],empty:[]};
+ entries.push({id:'b',from:'persona:p',dimension:'overworld',origin:blueprint.origin,blueprint,design:{source:schematic()},buildOwned:{'0,65,0':42}});
+ bot.blockAt=()=>({name:'diamond_block',stateId:99});
+ assert.throws(()=>prepareBuild(bot,{mode:'edit',build_id:'b',schematic:{...schematic(),existingOffset:[0,0,0]}},'persona:p',{enabled:true}));
+ const continuing=prepareBuild(bot,{mode:'repair',build_id:'b',schematic:null},'persona:p',{enabled:true});assert.equal(continuing.buildOwned['0,65,0'],42);
+});
+test('registry persists ownership signatures for later leases',()=>{
+ const {BuildRegistry}=require('../src/builds');const registry=new BuildRegistry(null);
+ const goal={kind:'build',from:'persona:p',request:'A floor',design:{source:schematic()},buildOwned:{'0,65,0':42},blueprint:{origin:{x:0,y:65,z:0},bounds:{min:{x:0,y:65,z:0},max:{x:2,y:66,z:2}},blocks:[]}};
+ const entry=registry.remember(goal,{dimension:'overworld'});assert.equal(entry.buildOwned['0,65,0'],42);goal.buildOwned['0,65,0']=99;assert.equal(entry.buildOwned['0,65,0'],42);
+});
