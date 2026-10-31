@@ -33,7 +33,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   else if(['follow','come'].includes(s?.kind)){if(!exact(s,['kind','target'])||!players.includes(s.target)||!state.players.includes(s.target))return 'unsupported_spec';}
   else if(s?.kind==='build') {
    if(!exact(s,['kind','request','mode','build_id','schematic'])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
-   try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(_){return 'unsupported_build';}
+   try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(err){return err.code||'invalid_build_geometry';}
   }
   else return 'unsupported_spec';
   if(impossible(s))return 'unworkable';return null;
@@ -80,7 +80,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
     if(!verified)status='failed';
    }
    if(!['complete','blocked','failed'].includes(status))return;
-   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,...(goal?.buildId?{build_id:goal.buildId}:{}),summary:verified?(s.kind==='build'?`Verified all planned structure blocks and clear cells for ${goal.buildId}`:s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}`});
+   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,...(goal?.buildId?{build_id:goal.buildId}:{}),...(goal?.personaBuildVerification?{build_verification:goal.personaBuildVerification}:{}),summary:verified?(s.kind==='build'?`Verified all planned structure blocks and clear cells for ${goal.buildId}`:s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}`});
   },
   close:()=>{closed=true;return enqueue(async()=>{if(active)await cancelNow(active.proposal.goal_id,'cancelled');});},
  };

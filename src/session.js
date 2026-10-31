@@ -847,9 +847,11 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       impossible:spec=>unworkable(bot,spec), stop:scopedStop,
       checkBuild:(spec,principal)=>!!buildApi.prepareBuild(bot,spec,principal,{enabled:buildEnabled}),
       verifyBuild:goal=>{
-        const verified=!!goal?.buildId&&buildApi.verifyBuild(bot,goal);
+        const report=buildApi.buildVerification(bot,goal);
+        if(goal)goal.personaBuildVerification=report;
+        const verified=!!goal?.buildId&&report.verified;
         const entry=goal?.buildId&&builds.find(goal.buildId);
-        if(entry){if(verified)entry.personaVerifiedAt=new Date().toISOString();else delete entry.personaVerifiedAt;builds.flush();}
+        if(entry){entry.personaVerification=report;if(verified)entry.personaVerifiedAt=new Date().toISOString();else delete entry.personaVerifiedAt;builds.flush();}
         return verified;
       },
       start:async spec=>{

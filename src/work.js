@@ -4950,6 +4950,15 @@ async function reachableBlocks(bot, task, candidates, { limit = 16, budgetMs = 3
 async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = () => {}) {
   task.check();
   require('./persona-build').assertBuildPolicy(goal);
+  if (goal.personaBuildReturn) {
+    const destination=goal.personaBuildReturn.target, at=new Vec3(destination.x,destination.y,destination.z);
+    if(bot.entity.position.distanceTo(at)>8){
+      goal.step={action:'return_to_build',building:goal.personaBuildReturn.entryId};save();onStep(goal);
+      await navigate(bot,task,new goals.GoalNear(at.x,at.y,at.z,3),{timeoutMs:20000,stallMs:5000});
+      task.check();return false;
+    }
+    delete goal.personaBuildReturn;save();
+  }
   if (goal.continueBuild && !goal.blueprint) {
     const entry = bot.buildRegistry?.find(goal.continueBuild.id);
     // Only the player can say what to do about a building the notes no

@@ -36,3 +36,8 @@ test('registry persists ownership signatures for later leases',()=>{
  const goal={kind:'build',from:'persona:p',request:'A floor',design:{source:schematic()},buildOwned:{'0,65,0':42},blueprint:{origin:{x:0,y:65,z:0},bounds:{min:{x:0,y:65,z:0},max:{x:2,y:66,z:2}},blocks:[]}};
  const entry=registry.remember(goal,{dimension:'overworld'});assert.equal(entry.buildOwned['0,65,0'],42);goal.buildOwned['0,65,0']=99;assert.equal(entry.buildOwned['0,65,0'],42);
 });
+test('owned continuation returns to registered structure without model coordinates or a renewed lease',()=>{
+ const {bot,entries}=fixture();bot.entity.position={x:118,y:65,z:0};entries.push({id:'b',from:'persona:p',dimension:'overworld',origin:{x:0,y:65,z:0},entrance:{x:1,y:66,z:-1},blueprint:{blocks:[],bounds:{}},design:{source:schematic()}});
+ const goal=prepareBuild(bot,{mode:'edit',build_id:'b',schematic:{...schematic(),existingOffset:[0,0,0]}},'persona:p',{enabled:true});
+ assert.deepEqual(goal.personaBuildReturn.target,entries[0].entrance);assert.deepEqual(goal.personaBuildPolicy.anchor,entries[0].origin);
+});

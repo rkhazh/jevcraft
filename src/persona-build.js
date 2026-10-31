@@ -4,7 +4,7 @@ const {validateSchematic,buildPalette}=require('./designer');
 const {matchesBuildBlock,buildFootprint,matchesOwnership}=require('./build-blocks');
 const LIMITS=Object.freeze({max_blocks:1024,max_size:[24,16,24],max_regions:64});
 const dimension=value=>String(value||'').replace(/^minecraft:/,'');
-function fail(message){throw Object.assign(new Error(`Persona build: ${message}`),{name:'PersonaBuildPolicy'});}
+function fail(message){const code=({'building disabled':'building_disabled','unknown or unowned structure':'build_not_owned','structure out of reach':'build_out_of_range','structure changed by another builder':'build_structure_changed','edit needs loaded structure blocks':'build_chunks_unloaded'})[message]||'build_policy_rejected';throw Object.assign(new Error(`Persona build: ${message}`),{name:'PersonaBuildPolicy',code});}
 function validate(source,registry) {
  if(!source||Object.keys(source).sort().join()!==['name','description','size','palette','regions','entrance','existingOffset','site'].sort().join()||!Array.isArray(source.size)||source.size.some((n,i)=>n>LIMITS.max_size[i])||!Array.isArray(source.regions)||source.regions.length>LIMITS.max_regions||source.site!==null)fail('schematic exceeds policy');
  if(Buffer.byteLength(JSON.stringify(source))>24000)fail('schematic too large');
@@ -19,7 +19,10 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  const entry=spec.build_id?bot.buildRegistry?.find(spec.build_id):null;
  if(spec.mode!=='fresh') {
   if(!entry||entry.from!==principal||dimension(entry.dimension)!==dimension(bot.game?.dimension))fail('unknown or unowned structure');
-  if(Math.hypot(entry.origin.x-anchor.x,entry.origin.y-anchor.y,entry.origin.z-anchor.z)>64)fail('structure out of reach');
+  const distance=Math.hypot(entry.origin.x-anchor.x,entry.origin.y-anchor.y,entry.origin.z-anchor.z);
+  if(distance>512)fail('structure out of reach');
+  base.personaBuildPolicy.anchor={...entry.origin};
+  if(distance>8)base.personaBuildReturn={target:{...(entry.entrance||entry.origin)},entryId:entry.id};
  }
  if(['finish','repair'].includes(spec.mode)){
   if(spec.schematic!==null||!entry?.design?.source)fail('continuation needs saved design');
@@ -34,7 +37,7 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
   return {...base,design};
  }
  if(!design.existingOffset)fail('edit must align existing structure');
- verifiedEditOwnership(bot,entry);
+ if(!base.personaBuildReturn)verifiedEditOwnership(bot,entry);
  return {...base,design,buildId:entry.id,buildAnchor:{...entry.origin},buildContinuation:{mode:'edit',target:entry.id,name:entry.name,placement:'beside_target'}};
 }
 function verifiedEditOwnership(bot,entry) {
@@ -59,20 +62,33 @@ function assertBuildPolicy(goal) {
  const cells=[...bp.blocks,...(bp.empty||[]),...clear,...fill],anchor=goal.personaBuildPolicy.anchor;
  if(cells.length>14000||cells.some(p=>![p.x,p.y,p.z].every(Number.isFinite)||Math.hypot(p.x-anchor.x,p.y-anchor.y,p.z-anchor.z)>64))fail('site exceeds admitted radius');
 }
-function verifyBuild(bot,goal) {
+function buildVerification(bot,goal) {
+ const report={verified:false,matched_blocks:0,mismatched_blocks:0,unknown_blocks:0,blocked_empty:0,samples:[]};
  try{
-  assertBuildPolicy(goal);const bp=goal.blueprint;if(!bp?.blocks?.length||bp.blocks.length>LIMITS.max_blocks)return false;
-  const block=p=>bot.blockAt(new Vec3(p.x,p.y,p.z));
-  return bp.blocks.every(cell=>buildFootprint(cell).every(part=>matchesBuildBlock(block(part),part)))&&
-   (bp.empty||[]).every(p=>['air','cave_air','void_air'].includes(block(p)?.name));
- }catch(_){return false;}
+  assertBuildPolicy(goal);const bp=goal.blueprint;if(!bp?.blocks?.length||bp.blocks.length>LIMITS.max_blocks)return report;
+  const sample=(p,expected,observed)=>{if(report.samples.length<5)report.samples.push({position:{x:p.x,y:p.y,z:p.z},expected,observed});};
+  const cells=[...new Map(bp.blocks.flatMap(buildFootprint).map(cell=>[`${cell.x},${cell.y},${cell.z}`,cell])).values()];
+  for(const cell of cells){
+   const block=bot.blockAt(new Vec3(cell.x,cell.y,cell.z));
+   if(!block){report.unknown_blocks++;sample(cell,cell.material,'unloaded');}
+   else if(matchesBuildBlock(block,cell))report.matched_blocks++;
+   else{report.mismatched_blocks++;sample(cell,cell.material,String(block.name).slice(0,64));}
+  }
+  for(const p of bp.empty||[]){const block=bot.blockAt(new Vec3(p.x,p.y,p.z));
+   if(!block){report.unknown_blocks++;sample(p,'air','unloaded');}
+   else if(!['air','cave_air','void_air'].includes(block.name)){report.blocked_empty++;sample(p,'air',String(block.name).slice(0,64));}
+  }
+  report.verified=!report.mismatched_blocks&&!report.unknown_blocks&&!report.blocked_empty;
+ }catch(_){report.policy_error=true;}
+ return report;
 }
+function verifyBuild(bot,goal){return buildVerification(bot,goal).verified;}
 function capabilities(bot,enabled){return {...LIMITS,enabled,modes:enabled?['fresh','finish','repair','edit']:[],allowed_blocks:enabled&&bot.registry?.blocksArray?buildPalette(bot.registry).slice(0,512):[]};}
 function describeBuilds(bot) {
  const entries=(bot.buildRegistry?.all(bot.game?.dimension)||[]).filter(e=>e.from?.startsWith('persona:')).slice(-4).reverse();
- return entries.map((entry,index)=>({id:entry.id,name:entry.name,status:entry.status==='complete'&&!entry.personaVerifiedAt?'complete_unverified':entry.status,verified:entry.status==='complete'&&!!entry.personaVerifiedAt,origin:entry.origin,bounds:entry.bounds,
+ return entries.map((entry,index)=>({id:entry.id,name:entry.name,status:entry.status==='complete'&&!entry.personaVerifiedAt?'complete_unverified':entry.status,verified:entry.status==='complete'&&!!entry.personaVerifiedAt,verification:entry.personaVerification||null,origin:entry.origin,bounds:entry.bounds,
   distance:bot.entity?.position&&entry.origin?Math.round(Math.hypot(entry.origin.x-bot.entity.position.x,entry.origin.y-bot.entity.position.y,entry.origin.z-bot.entity.position.z)):null,
   block_count:entry.blueprint?.blocks?.length||0,...(index===0&&entry.design?.source&&Buffer.byteLength(JSON.stringify(entry.design.source))<=24000?{schematic:entry.design.source}:{}),
  }));
 }
-module.exports={LIMITS,prepareBuild,assertBuildPolicy,verifyBuild,capabilities,describeBuilds,verifiedEditOwnership};
+module.exports={LIMITS,prepareBuild,assertBuildPolicy,verifyBuild,capabilities,describeBuilds,verifiedEditOwnership,buildVerification};
