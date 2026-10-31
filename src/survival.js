@@ -12357,11 +12357,11 @@ class Survival {
         if (plan?.choice === 'stay') delete this.state.pocketPlan;
         delete this.state.sealHold; sealHold = null;
       }
-      const holdStay = sealHold && holdRead?.holds && !holdBreak && plan?.choice === 'stay' && options.stay ? 'stay' : null;
+      const holdStay = sealHold && holdRead?.holds && !holdBreak && plan?.choice === 'stay' && require('./pocket-hold').withinSealHold(plan) && options.stay ? 'stay' : null;
       if (sealHold && holdRead) sealHold.read = { waiting: holdRead.waiting, ...(holdBreak ? { askedFor: holdBreak } : {}) };
       if (sealHold && holdRead?.holds && options.stay && typeof options.stay.description === 'string') {
         const w = holdRead.waiting.map(x => x === 'dawn' ? `dawn (about ${minutesToDawn(bot)} real minutes)` : x === 'the threat gone' ? `nothing hostile within ${NR.CLEAR_WITHIN} blocks or in sight for ${NR.CLEAR_MS / 1000} seconds` : 'health back at 20');
-        options.stay.description += ` Chosen, the stay is held until ${w.length > 1 ? `${w.slice(0, -1).join(', ')} and ${w.at(-1)}` : w[0]} (what the pocket was sealed for), and not asked again meanwhile unless the bot is hurt, a mob comes within 5 blocks, hunger wants food with none carried or the bed can be slept in.`;
+        options.stay.description += ` Chosen, the stay is held until ${w.length > 1 ? `${w.slice(0, -1).join(', ')} and ${w.at(-1)}` : w[0]} (what the pocket was sealed for), reassessed after at most three minutes, or earlier if the bot is hurt, a mob comes within 5 blocks, hunger wants food with none carried or the bed can be slept in.`;
       }
       // The wait for dawn chosen in the night mine (seal_and_wait) holds the
       // stay, as a stay chosen here does (note 1385): 25598 (2026-10-06
@@ -13402,8 +13402,7 @@ function pocketHeldOf(bot, state, now = Date.now()) {
   // while a mob stays near with no way in, and the countdown said about 30 seconds each look. full-19 (25591,
   // 2026-10-28 12:00:23 to 12:09:51Z) stayed sealed past dawn, a zombie with no way to it and a creeper out of sight
   // 9 blocks off, pocket_next not asked for nine minutes though each turn said it would be in about 30 seconds.
-  const SEAL_HOLD_MS = 3 * 60000;
-  if (p?.choice === 'stay' && h?.stayHealth != null && h.read?.waiting?.length && !h.read.askedFor && now - (p.at || now) < SEAL_HOLD_MS) {
+  if (p?.choice === 'stay' && h?.stayHealth != null && h.read?.waiting?.length && !h.read.askedFor && require('./pocket-hold').withinSealHold(p,now)) {
     const waits = h.read.waiting.map(w => w === 'dawn' ? Math.round(((DAY.DAWN - (bot.time?.timeOfDay ?? 0) + 24000) % 24000) / 20)
       : w === 'the threat gone' ? Math.max(1, Math.round((require('./night-record').CLEAR_MS - (h.clearSince ? now - h.clearSince : 0)) / 1000)) : Math.max(1, Math.round((20 - (bot.health ?? 20)) * 4)));
     return { choice: 'stay', secondsAgo: Math.round((now - (p.at || now)) / 1000), forSeconds: Math.max(...waits), why: `the stay held until ${h.read.waiting.join(' and ')}, what the pocket was sealed for` };
