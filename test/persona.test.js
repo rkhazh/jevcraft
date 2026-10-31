@@ -42,3 +42,10 @@ test('close fences immediately while a start callback is still pending',async()=
  const pending=f.persona.submit(p);await new Promise(r=>setImmediate(r));const closing=f.persona.close();
  assert.equal(f.persona.valid(p.goal_id),false);release();await pending;await closing;
 });
+test('craft and come are generic typed capabilities with factual completion',async()=>{
+ const f=fixture();const craft={...f.proposal(),spec:{kind:'craft',item:'oak_log',count:2,deliver:false}};
+ assert.equal((await f.persona.submit(craft)).status,'accepted');f.body.inventory.oak_log=2;f.persona.finish(craft.goal_id,'complete');assert.equal(f.persona.events(0).events.at(-1).verified,true);
+ f.body.position={x:0,y:64,z:0};f.body.player_positions={Alex:{x:2,y:64,z:0}};
+ const come={...f.proposal(),spec:{kind:'come',target:'Alex'}};assert.equal((await f.persona.submit(come)).status,'accepted');f.persona.finish(come.goal_id,'complete');assert.equal(f.persona.events(0).events.at(-1).verified,true);
+ const distant={...f.proposal(),spec:{kind:'come',target:'Alex'}};await f.persona.submit(distant);f.body.player_positions.Alex.x=9;f.persona.finish(distant.goal_id,'complete');assert.equal(f.persona.events(0).events.at(-1).status,'failed');await f.persona.close();
+});

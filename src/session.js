@@ -740,7 +740,8 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         // save lay unplayed (a restart, a trial begun from a stage's save).
         require('./tried').resumed(saved, { savedAt: Date.parse(saved.updatedAt) });
         launch(saved);
-      } else bot.chat('Call me Jev: "Jev come here", "Jev follow me", "Jev craft a chest", or "Jev get me 8 birch stairs".');
+      } else if (externalPersona) bot.chat('Connected. I am ready to chat and explore.');
+      else bot.chat('Call me Jev: "Jev come here", "Jev follow me", "Jev craft a chest", or "Jev get me 8 birch stairs".');
     } catch (err) { console.error('[bot] spawn:', err); bot.quit('Could not initialize the world'); }
   });
   // The game's death message for this bot, kept for the death record: the
@@ -827,7 +828,9 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
         dimension:bot.game?.dimension || 'unknown',version:bot.version || null,bot_uuid:bot.player?.uuid || null,
-        position:position(bot.entity?.position),items:Object.keys(bot.registry?.itemsByName || {}),
+        position:position(bot.entity?.position),
+        player_positions:Object.fromEntries(Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).slice(0,128).map(p=>[p.username,position(p.entity.position)])),
+        items:Object.keys(bot.registry?.itemsByName || {}),
         players:Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).map(p=>p.username),
         inventory:(bot.inventory?.items() || []).reduce((out,i)=>{out[i.name]=(out[i.name]||0)+i.count;return out;},{})}),
       impossible:spec=>unworkable(bot,spec), stop:scopedStop,
