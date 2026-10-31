@@ -49,7 +49,21 @@ function createPersona({read, start, stop, impossible=()=>false, items=[], playe
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:p.expires_at};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
  }
  return {snapshot,valid,emit,submit:p=>enqueue(()=>submitNow(p)),cancel:id=>enqueue(()=>cancelNow(id)),
-  events:after=>({events:log.filter(e=>e.sequence>after),cursor:sequence,oldest_sequence:log[0]?.sequence??sequence}),
+  events(after) {
+   const pending=log.filter(e=>e.sequence>after);
+   const packet={events:[],cursor:after,oldest_sequence:log[0]?.sequence??sequence,has_more:false};
+   let eventBytes=0;
+   for(const event of pending) {
+    const bytes=Buffer.byteLength(JSON.stringify(event),'utf8');
+    // Count serialized UTF-8 bytes including commas and the full envelope.
+    // Reserve the longer false literal, so the final has_more value always fits.
+    const envelope=Buffer.byteLength(JSON.stringify({...packet,events:[],cursor:event.sequence,has_more:false}),'utf8');
+    if(envelope+eventBytes+bytes+packet.events.length>65536)break;
+    packet.events.push(event);packet.cursor=event.sequence;eventBytes+=bytes;
+   }
+   packet.has_more=packet.events.length<pending.length;
+   return packet;
+  },
   finish(id,status){if(!valid(id))return;const s=active.proposal.spec;let verified=false;
    if(status==='complete'){
     const state=read();

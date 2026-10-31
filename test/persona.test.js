@@ -49,3 +49,20 @@ test('craft and come are generic typed capabilities with factual completion',asy
  const come={...f.proposal(),spec:{kind:'come',target:'Alex'}};assert.equal((await f.persona.submit(come)).status,'accepted');f.persona.finish(come.goal_id,'complete');assert.equal(f.persona.events(0).events.at(-1).verified,true);
  const distant={...f.proposal(),spec:{kind:'come',target:'Alex'}};await f.persona.submit(distant);f.body.player_positions.Alex.x=9;f.persona.finish(distant.goal_id,'complete');assert.equal(f.persona.events(0).events.at(-1).status,'failed');await f.persona.close();
 });
+test('event pages fit 64KiB in UTF-8 and drain a backlog without dropping events',async()=>{
+ const f=fixture();for(let n=0;n<150;n++)f.persona.emit({type:'chat',user:'Alex',msg:'😀\n'.repeat(500)});
+ let cursor=0, received=[], pages=0;
+ do{
+  const packet=f.persona.events(cursor);assert.ok(Buffer.byteLength(JSON.stringify(packet),'utf8')<=65536);
+  assert.equal(packet.oldest_sequence,1);assert.ok(packet.events.length>0);assert.equal(packet.cursor,packet.events.at(-1).sequence);
+  received.push(...packet.events);cursor=packet.cursor;pages++;
+  if(!packet.has_more)break;
+  assert.ok(pages<151,'pagination must advance');
+ }while(true);
+ assert.ok(pages>1);assert.deepEqual(received.map(e=>e.sequence),Array.from({length:150},(_,i)=>i+1));
+ assert.deepEqual(f.persona.events(cursor),{events:[],cursor:150,oldest_sequence:1,has_more:false});await f.persona.close();
+});
+test('event ring reports an explicit gap and preserves paginated ordering',async()=>{
+ const f=fixture();for(let n=0;n<1005;n++)f.persona.emit({type:'chat',user:'Alex',msg:'hello'});
+ const packet=f.persona.events(0);assert.equal(packet.oldest_sequence,6);assert.equal(packet.events[0].sequence,6);assert.equal(packet.cursor,packet.events.at(-1).sequence);assert.equal(packet.has_more,true);await f.persona.close();
+});
