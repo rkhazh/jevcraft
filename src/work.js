@@ -61,7 +61,7 @@ const { batchPlan, remainingOutputs } = require('./batch-plan');
 const { visitPlace } = require('./memory');
 const { selectBundleBatch, batchOutputs } = require('./bundle-batch');
 const { remainingBuildBatch, materialCounts, createBuildBatch } = require('./build-batch');
-const { matchesBuildBlock, placementGoal, buildCellComplete, buildFootprint, blockOwnership } = require('./build-blocks');
+const { isBed, matchesBuildBlock, placementGoal, buildCellComplete, buildFootprint, blockOwnership } = require('./build-blocks');
 const { isDoor, doorPairMatches } = require('./doors');
 const interactableBlocks = new Set(require('mineflayer-pathfinder/lib/interactable.json'));
 const { chooseConstructionWork, approachConstruction } = require('./construction-access');
@@ -1929,6 +1929,17 @@ async function place(bot, task, p, material, { face, properties, stay = false, r
       bot.entity.position.offset(0, 1.62, 0).distanceTo(p.offset(0.5, 0.5, 0.5)) > 4.5) throw new Error(`Placing at ${p} would move me off this ledge`);
   }
   if (isDoor(material) && !air(bot.blockAt(p.offset(0, 1, 0)))) throw new Error(`A door needs room for its top half at ${p}`);
+  const placementParts = buildFootprint(cell);
+  for (const part of placementParts.slice(1)) {
+    const q = new Vec3(part.x, part.y, part.z);
+    if (!air(bot.blockAt(q))) throw new Error(`${material} needs room for its companion block at ${q}`);
+    const body = occupant(bot, q);
+    if (body) throw bodyError(`Placement obstructed: ${occupiedSays(body, q)}`, body, q);
+  }
+  if (isBed(material)) for (const part of placementParts) {
+    const floor = bot.blockAt(new Vec3(part.x, part.y - 1, part.z));
+    if (floor?.boundingBox !== 'block') throw new Error(`A bed needs support below both halves at ${p}`);
+  }
   // Ground cover is replaced by a placed block, the way the game does it:
   // leaf litter on the chest cell held up the whole base.
   // A flower or anything else that breaks at a touch and stops nothing
@@ -1975,7 +1986,7 @@ async function place(bot, task, p, material, { face, properties, stay = false, r
     const sneak = interactableBlocks.has(ref.name) && !wasSneaking;
     try {
       if (sneak) { bot.setControlState('sneak', true); await bot.waitForTicks(1); task.check(); }
-      // A stair or door takes its facing from the way the player looks, and
+      // A stair, door or bed takes its facing from the way the player looks, and
       // looking at the click point from a diagonal rounded a west stair to
       // south: the build then waited on a block that could never match. Face
       // the wanted direction exactly and click without turning again.
@@ -4937,6 +4948,8 @@ async function reachableBlocks(bot, task, candidates, { limit = 16, budgetMs = 3
 }
 
 async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = () => {}) {
+  task.check();
+  require('./persona-build').assertBuildPolicy(goal);
   if (goal.continueBuild && !goal.blueprint) {
     const entry = bot.buildRegistry?.find(goal.continueBuild.id);
     // Only the player can say what to do about a building the notes no
@@ -5080,6 +5093,8 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
       await explore(bot, task, goal, save, 'supported building site', { surfaceOnly: true });
       return false;
     }
+    require('./persona-build').assertBuildPolicy(goal);
+    task.check();
     // The building being changed is Jev's own work, not player property:
     // without this the site-changed guard rejects its own walls. Only that
     // one: the neighbours are built around, and owned they were stripped as
@@ -5242,12 +5257,13 @@ async function executeConstructionWork(bot, task, goal, save, work) {
     try { await place(bot, task, p, work.material, { face, properties: work.properties }); }
     finally {
       bot.removeListener('blockPlaced', observe);
-      // A door's second block is created by the server, not a second placement.
+      // A door or bed companion is created by the server, not a second placement.
       // Capture both acknowledgements even when stop arrives on blockPlaced.
       if (placed && footprint.length > 1) {
         const deadline = Date.now() + 250;
-        while (!doorPairMatches(bot.blockAt(p), bot.blockAt(p.offset(0, 1, 0))) && Date.now() < deadline) await sleep(25);
-        if (doorPairMatches(bot.blockAt(p), bot.blockAt(p.offset(0, 1, 0)))) {
+        const complete = () => buildCellComplete(bot, { ...p, material: work.material, properties: work.properties });
+        while (!complete() && Date.now() < deadline) await sleep(25);
+        if (complete()) {
           goal.buildOwned ||= {};
           for (const part of footprint) goal.buildOwned[`${part.x},${part.y},${part.z}`] = blockOwnership(bot.blockAt(pos(part)));
         }

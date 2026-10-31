@@ -317,7 +317,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         setTimeout(() => { relaunching = false; if (!ended && !active) launch(goal); }, 1500);
         return;
       }
-      if (goal.personaGoalId) persona?.finish(goal.personaGoalId, goal.status);
+      if (goal.personaGoalId) persona?.finish(goal.personaGoalId, goal.status, goal);
       if (!goal.dream && ['complete', 'blocked'].includes(goal.status)) ledger.close(goal.ledgerRun, goal.status);
       // A custom dream is one request: done when it completes.
       if (goal.dream === 'custom' && goal.status === 'complete' && !ended) settleCustom(dreamStore.read(), goal);
@@ -824,9 +824,12 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       catch (err) { close('persona watchdog'); bot.quit('Persona cancellation watchdog'); throw err; }
       finally { clearTimeout(timer); }
     };
+    const buildApi=require('./persona-build'), buildEnabled=process.env.JEV_PERSONA_BUILD==='1';
     persona = require('./persona-admission').createPersona({
       items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
-      read:()=>({...require('./persona-observation').nearbyWorld(bot),connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
+      read:()=>({...require('./persona-observation').nearbyWorld(bot),
+        build_capabilities:buildApi.capabilities(bot,buildEnabled),builds:buildApi.describeBuilds(bot),
+        build_progress:active?.goal?.kind==='build'?{build_id:active.goal.buildId||null,phase:active.goal.buildPhase||active.goal.step?.action||'pending',placements_recorded:Object.keys(active.goal.buildOwned||{}).length,planned_blocks:active.goal.blueprint?.blocks?.length||null}:null,connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
         dimension:bot.game?.dimension || 'unknown',version:bot.version || null,bot_uuid:bot.player?.uuid || null,
         position:position(bot.entity?.position),
         player_positions:Object.fromEntries(Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).slice(0,128).map(p=>[p.username,position(p.entity.position)])),
@@ -834,10 +837,18 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         players:Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).map(p=>p.username),
         inventory:(bot.inventory?.items() || []).reduce((out,i)=>{out[i.name]=(out[i.name]||0)+i.count;return out;},{})}),
       impossible:spec=>unworkable(bot,spec), stop:scopedStop,
+      checkBuild:(spec,principal)=>!!buildApi.prepareBuild(bot,spec,principal,{enabled:buildEnabled}),
+      verifyBuild:goal=>{
+        const verified=!!goal?.buildId&&buildApi.verifyBuild(bot,goal);
+        const entry=goal?.buildId&&builds.find(goal.buildId);
+        if(entry){if(verified)entry.personaVerifiedAt=new Date().toISOString();else delete entry.personaVerifiedAt;builds.flush();}
+        return verified;
+      },
       start:async spec=>{
         await scopedStop(null,'interrupted');
         if (!persona.valid(spec.personaGoalId) || !ready || ended) throw new Error('Persona lease expired');
-        const goal={...spec,version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:[],requesterPosition:null,
+        const build=spec.kind==='build'?buildApi.prepareBuild(bot,spec,spec.from,{enabled:buildEnabled}):{};
+        const goal={...spec,...build,version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:[],requesterPosition:null,
           initialInventory:bot.inventory.items().map(i=>({name:i.name,count:i.count}))};
         saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
       },

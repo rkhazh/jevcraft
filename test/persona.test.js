@@ -66,3 +66,11 @@ test('event ring reports an explicit gap and preserves paginated ordering',async
  const f=fixture();for(let n=0;n<1005;n++)f.persona.emit({type:'chat',user:'Alex',msg:'hello'});
  const packet=f.persona.events(0);assert.equal(packet.oldest_sequence,6);assert.equal(packet.events[0].sequence,6);assert.equal(packet.cursor,packet.events.at(-1).sequence);assert.equal(packet.has_more,true);await f.persona.close();
 });
+test('typed model builds are policy gated and completion includes verified structure identity',async()=>{
+ let checked=0;const f=fixture({checkBuild:(s,principal)=>{checked++;return principal==='persona:skipper';},verifyBuild:g=>g?.buildId==='owned'});
+ const p={...f.proposal(),spec:{kind:'build',request:'An original small room',mode:'fresh',build_id:null,schematic:{}}};
+ assert.equal((await f.persona.submit(p)).status,'accepted');assert.ok(checked>=1);
+ f.persona.finish(p.goal_id,'complete',{buildId:'owned'});const event=f.persona.events(0).events.at(-1);assert.equal(event.verified,true);assert.equal(event.build_id,'owned');
+ const invalid={...f.proposal(),spec:{...p.spec,extra:'bypass'}};assert.equal((await f.persona.submit(invalid)).status,'rejected');await f.persona.close();
+ const disabled=fixture();assert.equal((await disabled.persona.submit({...disabled.proposal(),spec:p.spec})).reason,'unsupported_build');await disabled.persona.close();
+});

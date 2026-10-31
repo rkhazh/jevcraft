@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === [...keys].sort().join();
 const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v) ? v.map(x=>JSON.parse(stable(x))) : Object.fromEntries(Object.keys(v).sort().map(k=>[k,JSON.parse(stable(v[k]))]))) : v);
-function createPersona({read, start, stop, impossible=()=>false, items=[], players=[], worldId='local'}) {
+function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local'}) {
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
  let active=null, sequence=0, closed=false, serial=Promise.resolve();
  const enqueue=fn=>{const p=serial.then(fn);serial=p.catch(()=>{});return p};
@@ -31,6 +31,10 @@ function createPersona({read, start, stop, impossible=()=>false, items=[], playe
   const s=p.spec;
   if(['obtain','craft'].includes(s?.kind)) {if(!exact(s,['kind','item','count','deliver'])||!items.includes(s.item)||!state.items.includes(s.item)||!Number.isInteger(s.count)||s.count<1||s.count>64||s.deliver!==false)return 'unsupported_spec';}
   else if(['follow','come'].includes(s?.kind)){if(!exact(s,['kind','target'])||!players.includes(s.target)||!state.players.includes(s.target))return 'unsupported_spec';}
+  else if(s?.kind==='build') {
+   if(!exact(s,['kind','request','mode','build_id','schematic'])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
+   try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(_){return 'unsupported_build';}
+  }
   else return 'unsupported_spec';
   if(impossible(s))return 'unworkable';return null;
  }
@@ -43,7 +47,7 @@ function createPersona({read, start, stop, impossible=()=>false, items=[], playe
   reason=check(p);if(reason)return rejection(p,reason);
   const current={proposal:structuredClone(p),deadline:performance.now()+(p.expires_at-Date.now()/1000)*1000};active=current;
   current.timer=setTimeout(()=>enqueue(()=>cancelNow(p.goal_id,'expired')).catch(()=>{}),Math.max(1,current.deadline-performance.now()));current.timer.unref();
-  try{await start({...p.spec,personaGoalId:p.goal_id,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
+  try{await start({...p.spec,personaGoalId:p.goal_id,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='build'?p.spec.request:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
   catch(err){await cancelNow(p.goal_id,'failed');return rejection(p,'start_failed');}
   if(!valid(p.goal_id)){await cancelNow(p.goal_id,'expired');return rejection(p,'expired');}
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:p.expires_at};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
@@ -64,7 +68,7 @@ function createPersona({read, start, stop, impossible=()=>false, items=[], playe
    packet.has_more=packet.events.length<pending.length;
    return packet;
   },
-  finish(id,status){if(!valid(id))return;const s=active.proposal.spec;let verified=false;
+  finish(id,status,goal){if(!valid(id))return;const s=active.proposal.spec;let verified=false;
    if(status==='complete'){
     const state=read();
     verified=['obtain','craft'].includes(s.kind)&&(state.inventory[s.item]||0)>=s.count;
@@ -72,10 +76,11 @@ function createPersona({read, start, stop, impossible=()=>false, items=[], playe
      const here=state.position, there=state.player_positions?.[s.target];
      verified=!!here&&!!there&&Math.hypot(here.x-there.x,here.y-there.y,here.z-there.z)<=3;
     }
+    if(s.kind==='build')verified=!!verifyBuild(goal);
     if(!verified)status='failed';
    }
    if(!['complete','blocked','failed'].includes(status))return;
-   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,summary:verified?(s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}`});
+   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,...(goal?.buildId?{build_id:goal.buildId}:{}),summary:verified?(s.kind==='build'?`Verified all planned structure blocks and clear cells for ${goal.buildId}`:s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}`});
   },
   close:()=>{closed=true;return enqueue(async()=>{if(active)await cancelNow(active.proposal.goal_id,'cancelled');});},
  };
