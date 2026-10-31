@@ -1,0 +1,61 @@
+'use strict';
+const { randomUUID } = require('node:crypto');
+const { performance } = require('node:perf_hooks');
+const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === [...keys].sort().join();
+const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v) ? v.map(x=>JSON.parse(stable(x))) : Object.fromEntries(Object.keys(v).sort().map(k=>[k,JSON.parse(stable(v[k]))]))) : v);
+function createPersona({read, start, stop, impossible=()=>false, items=[], players=[], worldId='local'}) {
+ const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
+ let active=null, sequence=0, closed=false, serial=Promise.resolve();
+ const enqueue=fn=>{const p=serial.then(fn);serial=p.catch(()=>{});return p};
+ function emit(data) { const event={...data,event_id:randomUUID(),session_id:sessionId,sequence:++sequence,observed_at:Date.now()/1000}; log.push(event);if(log.length>1000)log.shift();return event; }
+ function snapshot() {
+  const state=read(), id=randomUUID(), now=Date.now()/1000;
+  observations.set(id,{at:now,mono:performance.now()});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
+  return {...state,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
+ }
+ function valid(id) {return !closed && active?.proposal.goal_id===id && active.deadline>performance.now();}
+ async function cancelNow(id, status='cancelled') {
+  if(!active || active.proposal.goal_id!==id)return {status:'ignored',goal_id:id};
+  const old=active; active=null;clearTimeout(old.timer);
+  await stop(id,status); emit({type:'goal',goal_id:id,status,summary:`Persona goal ${status}`,verified:false});return {status,goal_id:id};
+ }
+ function rejection(p,reason){return {status:'rejected',reason,goal_id:p?.goal_id??null,session_id:sessionId};}
+ function check(p) {
+  if(!exact(p,['schema_version','goal_id','persona_id','session_id','observation_id','issued_at','expires_at','state','spec']))return 'invalid_shape';
+  if(p.schema_version!==1||p.state!=='proposed'||typeof p.goal_id!=='string'||!/^[0-9a-f-]{36}$/i.test(p.goal_id)||typeof p.persona_id!=='string'||!p.persona_id.length||p.persona_id.length>128)return 'invalid_envelope';
+  if(closed||p.session_id!==sessionId)return 'wrong_session';
+  const now=Date.now()/1000, observation=observations.get(p.observation_id);
+  if(!Number.isFinite(p.issued_at)||!Number.isFinite(p.expires_at)||p.issued_at>now+1||p.expires_at<=now||p.expires_at-p.issued_at>120||p.expires_at<=p.issued_at)return 'expired';
+  if(!observation||performance.now()-observation.mono>5000)return 'stale_observation';
+  const state=read();if(!state.connected||state.health<8||!['overworld','minecraft:overworld'].includes(state.dimension))return 'unsafe_state';
+  const s=p.spec;
+  if(s?.kind==='obtain') {if(!exact(s,['kind','item','count','deliver'])||!items.includes(s.item)||!state.items.includes(s.item)||!Number.isInteger(s.count)||s.count<1||s.count>64||s.deliver!==false)return 'unsupported_spec';}
+  else if(s?.kind==='follow'){if(!exact(s,['kind','target'])||!players.includes(s.target)||!state.players.includes(s.target))return 'unsupported_spec';}
+  else return 'unsupported_spec';
+  if(impossible(s))return 'unworkable';return null;
+ }
+ async function submitNow(p) {
+  const fingerprint=stable(p), previous=seen.get(p?.goal_id);
+  if(previous)return previous.fingerprint===fingerprint?previous.result:rejection(p,'id_conflict');
+  let reason=check(p);if(reason)return rejection(p,reason);
+  if(seen.size>=10000)return rejection(p,'session_capacity');
+  if(active)await cancelNow(active.proposal.goal_id,'cancelled');
+  reason=check(p);if(reason)return rejection(p,reason);
+  const current={proposal:structuredClone(p),deadline:performance.now()+(p.expires_at-Date.now()/1000)*1000};active=current;
+  current.timer=setTimeout(()=>enqueue(()=>cancelNow(p.goal_id,'expired')).catch(()=>{}),Math.max(1,current.deadline-performance.now()));current.timer.unref();
+  try{await start({...p.spec,personaGoalId:p.goal_id,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='obtain'?`Obtain ${p.spec.count} ${p.spec.item}`:`Follow ${p.spec.target}`});}
+  catch(err){await cancelNow(p.goal_id,'failed');return rejection(p,'start_failed');}
+  if(!valid(p.goal_id)){await cancelNow(p.goal_id,'expired');return rejection(p,'expired');}
+  const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:p.expires_at};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
+ }
+ return {snapshot,valid,emit,submit:p=>enqueue(()=>submitNow(p)),cancel:id=>enqueue(()=>cancelNow(id)),
+  events:after=>({events:log.filter(e=>e.sequence>after),cursor:sequence,oldest_sequence:log[0]?.sequence??sequence}),
+  finish(id,status){if(!valid(id))return;const s=active.proposal.spec;let verified=false;
+   if(status==='complete'){verified=s.kind==='obtain'&&(read().inventory[s.item]||0)>=s.count;if(!verified)status='failed';}
+   if(!['complete','blocked','failed'].includes(status))return;
+   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,summary:verified?`Observed at least ${s.count} ${s.item} in inventory`:`Goal ${status}`});
+  },
+  close:()=>{closed=true;return enqueue(async()=>{if(active)await cancelNow(active.proposal.goal_id,'cancelled');});},
+ };
+}
+module.exports={createPersona,exact};

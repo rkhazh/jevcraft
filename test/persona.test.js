@@ -1,0 +1,44 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
+const { createPersona } = require('../src/persona-admission');
+function fixture(options={}) {
+ let launches=0, stops=0;
+ const body={ connected:true,health:20,dimension:'overworld',items:['oak_log'],players:['Alex'],inventory:{} };
+ const persona=createPersona({read:()=>body,items:['oak_log'],players:['Alex'],start:async()=>{launches++},stop:async()=>{stops++},...options});
+ const proposal=()=>{const s=persona.snapshot();return {schema_version:1,goal_id:randomUUID(),persona_id:'skipper',session_id:s.session_id,observation_id:s.observation_id,issued_at:Date.now()/1000,expires_at:Date.now()/1000+60,state:'proposed',spec:{kind:'obtain',item:'oak_log',count:8,deliver:false}}};
+ return {persona,proposal,body,launches:()=>launches,stops:()=>stops};
+}
+test('accepts once, conflicts on changed replay, rejection preserves running goal',async()=>{
+ const f=fixture();const p=f.proposal();assert.equal((await f.persona.submit(p)).status,'accepted');
+ assert.equal((await f.persona.submit(p)).status,'accepted');assert.equal(f.launches(),1);
+ assert.equal((await f.persona.submit({...p,spec:{...p.spec,count:9}})).reason,'id_conflict');
+ assert.equal((await f.persona.submit({...f.proposal(),spec:{kind:'obtain',item:'bedrock',count:1,deliver:false}})).status,'rejected');assert.equal(f.stops(),0);await f.persona.close();
+});
+test('rejects wrong session, unknown keys, expiry and dangerous state',async()=>{
+ const f=fixture(); for(const change of [{session_id:'old'},{extra:true},{expires_at:0},{spec:{kind:'operator_command'}}]) assert.equal((await f.persona.submit({...f.proposal(),...change})).status,'rejected');
+ f.body.health=2;assert.equal((await f.persona.submit(f.proposal())).status,'rejected');assert.equal(f.launches(),0);await f.persona.close();
+});
+test('cancel fences old launches and cannot cancel a different goal',async()=>{
+ const f=fixture();const p=f.proposal();await f.persona.submit(p);assert.equal(f.persona.valid(p.goal_id),true);
+ await f.persona.cancel('other');assert.equal(f.stops(),0);await f.persona.cancel(p.goal_id);assert.equal(f.persona.valid(p.goal_id),false);assert.equal(f.stops(),1);await f.persona.close();
+});
+test('lease expiry stops work locally without planner connection',async()=>{
+ const f=fixture();const p=f.proposal();p.expires_at=Date.now()/1000+.04;await f.persona.submit(p);await new Promise(r=>setTimeout(r,100));assert.equal(f.persona.valid(p.goal_id),false);assert.equal(f.persona.events(0).events.at(-1).status,'expired');await f.persona.close();
+});
+test('completion requires observed item count; follow cannot claim completion',async()=>{
+ const f=fixture();let p=f.proposal();await f.persona.submit(p);f.persona.finish(p.goal_id,'complete');assert.equal(f.persona.events(0).events.at(-1).status,'failed');
+ p=f.proposal();await f.persona.submit(p);f.body.inventory.oak_log=8;f.persona.finish(p.goal_id,'complete');assert.equal(f.persona.events(0).events.at(-1).verified,true);await f.persona.close();
+});
+test('expiry during admission await cannot revive or acknowledge late work',async()=>{
+ let release;const f=fixture({start:()=>new Promise(r=>{release=r})});
+ const p=f.proposal();p.expires_at=Date.now()/1000+.025;
+ const pending=f.persona.submit(p);await new Promise(r=>setTimeout(r,50));release();
+ assert.equal((await pending).status,'rejected');assert.equal(f.persona.valid(p.goal_id),false);assert.equal(f.stops(),1);await f.persona.close();
+});
+test('close fences immediately while a start callback is still pending',async()=>{
+ let release;const f=fixture({start:()=>new Promise(r=>{release=r})});const p=f.proposal();
+ const pending=f.persona.submit(p);await new Promise(r=>setImmediate(r));const closing=f.persona.close();
+ assert.equal(f.persona.valid(p.goal_id),false);release();await pending;await closing;
+});

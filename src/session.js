@@ -51,6 +51,8 @@ function unworkable(bot, spec) {
 
 function createSession(config, client, { stateDirectory = path.join(__dirname, '..', '.bot-state'), recorder,
   runLedger = path.join(stateDirectory, 'run-ledger.md') } = {}) {
+  const externalPersona = process.env.JEV_PERSONA_MODE === '1';
+  let persona = null;
   let ended = false, spawned = false, resolveClosed;
   const connectedAt = Date.now();
   const closed = new Promise(resolve => { resolveClosed = resolve; });
@@ -211,7 +213,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     if (standing.ledgerRun !== run.id) { standing.ledgerRun = run.id; saveDream(standing); }
     return run.id;
   }
-  dreamRun(dreamStore.read());
+  if (!externalPersona) dreamRun(dreamStore.read());
   const readyForDream = () => bot.game?.gameMode === 'creative' ||
     ((bot.game?.dimension !== 'minecraft:overworld' && bot.game?.dimension !== 'overworld' || (bot.time?.timeOfDay ?? 0) < DAY.DUSK) &&
       (bot.health ?? 20) >= 14 && (bot.food ?? 20) >= 12 && !immediateThreat(bot));
@@ -219,9 +221,10 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // The old goal's copy only where it can be this world's: with a world id
   // the goal store is still per server.
   const survival = createSurvival(bot, { state: survivalStore.read() || (memoryIdentity === identity ? store.read()?.survival : undefined), client: routed });
-  if (!survivalStore.read() && store.read()?.status === 'cancelled') survival.state.paused = true;
+  if (!externalPersona && !survivalStore.read() && store.read()?.status === 'cancelled') survival.state.paused = true;
+  if (externalPersona) survival.state.paused = false;
   const saveSurvival = () => { if (!ended) { survival.state.version = 1; survivalStore.save(survival.state); } };
-  const saveGoal = goal => { if (!ended) { memory.recordGoal(goal, bot); world.harvest(goal); store.save(goal); } };
+  const saveGoal = goal => { if (!ended && (!goal.personaGoalId || persona?.valid(goal.personaGoalId))) { memory.recordGoal(goal, bot); world.harvest(goal); store.save(goal); } };
   const workStore = { save: goal => { saveGoal(goal); saveSurvival(); } };
   let active = null;
   // A goal going again after a threat escaped its loop (launch's catch).
@@ -257,6 +260,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
 
   function launch(goal) {
+    if (ended || (externalPersona && (!goal.personaGoalId || !persona?.valid(goal.personaGoalId)))) return;
     world.hydrate(goal);
     memory.bind(goal);
     goal.memoryContext = memory.context(goal.from);
@@ -266,6 +270,10 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     if (goal.dream) goal.ledgerRun = dreamRun(dreamStore.read()) ?? goal.ledgerRun;
     else goal.ledgerRun = ledger.open({ id: goal.ledgerRun, kind: 'request', name: goal.request, startedAt: goal.createdAt }).id;
     const task = new Task(goal.kind, goal.request);
+    if (goal.personaGoalId) {
+      const check = task.check.bind(task);
+      task.check = () => { if (!persona.valid(goal.personaGoalId)) task.cancel(); return check(); };
+    }
     const session = { task, goal };
     active = session;
     session.promise = runGoal(bot, task, goal, workStore, {
@@ -284,6 +292,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         try { if (bot.game?.gameMode !== 'creative') require('./stillness').flipWatch(bot, g); } catch (_) { /* a look missed */ }
       },
     }).catch(err => {
+      if (goal.personaGoalId && !persona?.valid(goal.personaGoalId)) return;
       // A threat or a breath that escaped the goal's own loop is the moment,
       // not the goal: the dream run was parked "blocked" on "Threat nearby:
       // something unseen at 0 blocks" and stood idle for sixteen hours
@@ -308,6 +317,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         setTimeout(() => { relaunching = false; if (!ended && !active) launch(goal); }, 1500);
         return;
       }
+      if (goal.personaGoalId) persona?.finish(goal.personaGoalId, goal.status);
       if (!goal.dream && ['complete', 'blocked'].includes(goal.status)) ledger.close(goal.ledgerRun, goal.status);
       // A custom dream is one request: done when it completes.
       if (goal.dream === 'custom' && goal.status === 'complete' && !ended) settleCustom(dreamStore.read(), goal);
@@ -348,6 +358,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // chooses the milestone from what code enumerates; a failure to choose or
   // an unusable answer falls back to ordinary idling until the cool-down ends.
   async function launchDream(standing) {
+    if (externalPersona) return;
     launchingDream = true;
     try {
       if (standing.dream === 'custom') {
@@ -392,8 +403,8 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
 
   function launchIdle() {
-    const retained = store.read();
-    const standing = dreamStore.read();
+    const retained = externalPersona ? null : store.read();
+    const standing = externalPersona ? null : dreamStore.read();
     if (standing?.dream && !launchingDream && shouldLaunchDream(standing, retained, { ready: readyForDream(), resting: isSetAside(survival, 'dream_launch', standing.dream) })) { launchDream(standing); return; }
     const goal = { ...(idleStore.read() || {}), version: 1, kind: 'survive', request: 'Stay alive and prepare supplies between player requests',
       retainedRequest: retained?.request, blueprint: retained?.blueprint, survival: survival.state,
@@ -411,7 +422,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     const until = () => {
       if (Date.now() - checkedAt < 3000) return launchable;
       checkedAt = Date.now();
-      const current = dreamStore.read();
+      const current = externalPersona ? null : dreamStore.read();
       launchable = !!current?.dream && shouldLaunchDream(current, store.read(), { ready: readyForDream(), resting: isSetAside(survival, 'dream_launch', current.dream) });
       return launchable;
     };
@@ -428,6 +439,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
 
   async function resume(revision = generation, options) {
+    if (externalPersona) return;
     if (active?.idle) await stop('interrupted');
     // The dream is what the bot does with nobody's work waiting. A player's
     // stopped or replaced request under it comes first; the dream picks up
@@ -463,7 +475,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   let waitCheckedAt = 0;
   const idleTimer = setInterval(() => {
     const now = Date.now();
-    if (ready && !pendingRequests && !launchingDream && (!active || active.idle) && now - waitCheckedAt > 5000) {
+    if (!externalPersona && ready && !pendingRequests && !launchingDream && (!active || active.idle) && now - waitCheckedAt > 5000) {
       waitCheckedAt = now;
       const saved = resumeSaved(store.read());
       if (waitingCleared(bot, saved)) {
@@ -481,6 +493,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     if (!player || player.username === bot.username || typeof data.plainMessage !== 'string') return;
     const from = player.username;
     let request = data.plainMessage;
+    if (externalPersona) { persona.emit({type:'chat',user:from,msg:request.slice(0,1000)}); return; }
     let literal;
     try { literal = requestedCommand(request, bot.username); }
     catch (err) { console.error(err); bot.chat('I could not use that command. Please check what you asked me to do.'); return; }
@@ -721,7 +734,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       ready = true;
       console.log(JSON.stringify({ sessionReady: true, username: bot.username }));
       const saved = store.read();
-      if (saved && ['running', 'recovering'].includes(saved.status) && !survival.state.paused) {
+      if (!externalPersona && saved && ['running', 'recovering'].includes(saved.status) && !survival.state.paused) {
         bot.chat(survival.state.recovery?.status === 'pending' ? "I'm back! I'll look for my dropped items, then carry on." : "I'm back! I'll carry on where I left off.");
         // What was tried, judged by its own clock: moved on by the time the
         // save lay unplayed (a restart, a trial begun from a stage's save).
@@ -778,6 +791,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     if (ended) return;
     observation?.detach(String(reason || 'connection closed'));
     ready = false; clearInterval(idleTimer); invalidateRequests();
+    persona?.close().catch(console.error);
     if (active && !active.task.cancelled) stop('running').catch(console.error);
     // This connection's saves on disk before a replacement reads state (note 2042): the survival store's save waits up to
     // 1.5 s, the rejoin read the file without the death just recorded, and its own saves then wrote over it. full-2's death
@@ -793,7 +807,46 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   bot.on('end', reason => close(reason));
   bot.on('kicked', reason => console.error('[bot] kicked:', reason));
   bot.on('error', err => console.error('[bot]', err.message));
-  return { bot, closed, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
+  if (externalPersona) {
+    const list = name => (process.env[name] || '').split(',').map(x=>x.trim()).filter(Boolean).slice(0,128);
+    // Stop only the requested work. Survival remains eligible once cooperative work exits.
+    const scopedStop = async (id, status) => {
+      invalidateRequests();
+      const running = active;
+      if (!running || (id && running.goal.personaGoalId !== id)) return;
+      running.task.cancel();
+      if (!running.idle) { running.goal.status=status; store.save(running.goal); store.flushSync(); }
+      bot.pathfinder.setGoal(null); bot.clearControlStates(); bot.stopDigging(); bot.deactivateItem();
+      let timer;
+      const timeout = new Promise((_, reject)=>{timer=setTimeout(()=>reject(new Error('Persona cancellation timed out')),2000);});
+      try { await Promise.race([running.promise,timeout]); }
+      catch (err) { close('persona watchdog'); bot.quit('Persona cancellation watchdog'); throw err; }
+      finally { clearTimeout(timer); }
+    };
+    persona = require('./persona-admission').createPersona({
+      items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
+      read:()=>({connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
+        dimension:bot.game?.dimension || 'unknown',version:bot.version || null,bot_uuid:bot.player?.uuid || null,
+        position:position(bot.entity?.position),items:Object.keys(bot.registry?.itemsByName || {}),
+        players:Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).map(p=>p.username),
+        inventory:(bot.inventory?.items() || []).reduce((out,i)=>{out[i.name]=(out[i.name]||0)+i.count;return out;},{})}),
+      impossible:spec=>unworkable(bot,spec), stop:scopedStop,
+      start:async spec=>{
+        await scopedStop(null,'interrupted');
+        if (!persona.valid(spec.personaGoalId) || !ready || ended) throw new Error('Persona lease expired');
+        const goal={...spec,version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:[],requesterPosition:null,
+          initialInventory:bot.inventory.items().map(i=>({name:i.name,count:i.count}))};
+        saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
+      },
+    });
+    let lastSpeech=0;
+    persona.chat = text=>{
+      if (!require('./persona-transport').plainSpeech(text)) throw new Error('Plain speech required');
+      if (!ready || ended || Date.now()-lastSpeech<1000) throw new Error('Speech unavailable');
+      lastSpeech=Date.now();bot.chat(text);
+    };
+  }
+  return { bot, persona, closed, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
 }
 
 module.exports = { unworkable, createSession };

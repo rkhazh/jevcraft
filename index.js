@@ -49,10 +49,14 @@ async function main() {
   }, 250).unref();
   fs.mkdirSync(path.dirname(pidFile), { recursive: true }); fs.writeFileSync(pidFile, `${process.pid}\n`);
   process.once('exit', () => { try { if (fs.readFileSync(pidFile, 'utf8').trim() === String(process.pid)) fs.unlinkSync(pidFile); } catch (_) {} });
+  let currentSession, personaServer;
+  if (process.env.JEV_PERSONA_MODE === '1') personaServer = await require('./src/persona-transport').startPersonaTransport({
+    getSession:()=>currentSession, token:process.env.JEV_PERSONA_TOKEN, port:Number(process.env.JEV_PERSONA_PORT || 8766),
+  });
   try {
-    await reconnect(() => createSession(config, client, { recorder }), {
+    await reconnect(() => (currentSession = createSession(config, client, { recorder })), {
       signal: shutdown.signal, report: event => console.log(JSON.stringify({ connection: event })),
     });
-  } finally { await recorder?.close(); }
+  } finally { if (personaServer) await new Promise(resolve=>personaServer.close(resolve)); await recorder?.close(); }
 }
 main().then(() => process.exit(0), err => { console.error(err); process.exit(1); });
