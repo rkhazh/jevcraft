@@ -826,7 +826,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     };
     persona = require('./persona-admission').createPersona({
       items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
-      read:()=>({connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
+      read:()=>({...require('./persona-observation').nearbyWorld(bot),connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
         dimension:bot.game?.dimension || 'unknown',version:bot.version || null,bot_uuid:bot.player?.uuid || null,
         position:position(bot.entity?.position),
         player_positions:Object.fromEntries(Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).slice(0,128).map(p=>[p.username,position(p.entity.position)])),

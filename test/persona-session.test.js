@@ -35,7 +35,7 @@ test('real session routes typed goal, rejects chat bypass, cancels without pausi
  try{
   const {createSession}=require('../src/session');session=createSession({host:'localhost',port:25565,username:'Skipper'},{},{stateDirectory:dir,runLedger:null});
   bot.emit('spawn');await new Promise(r=>setTimeout(r,30));
-  assert.equal(session.persona.snapshot().connected,true);assert.ok(spoken.some(t=>t.includes('ready to chat')));assert.ok(!spoken.some(t=>t.includes('Call me Jev')));
+  assert.equal(session.persona.snapshot().connected,true);assert.deepEqual(session.persona.snapshot().nearby_entities,[]);assert.equal(session.persona.snapshot().ground_block,null);assert.ok(spoken.some(t=>t.includes('ready to chat')));assert.ok(!spoken.some(t=>t.includes('Call me Jev')));
   bot._client.emit('playerChat',{sender:'a',plainMessage:'Skipper get me 8 oak logs'});
   await new Promise(r=>setTimeout(r,10));assert.equal(starts,0);assert.equal(session.persona.events(0).events.at(-1).type,'chat');
   const s=session.persona.snapshot(),p={schema_version:1,goal_id:randomUUID(),persona_id:'skipper',session_id:s.session_id,observation_id:s.observation_id,issued_at:Date.now()/1000,expires_at:Date.now()/1000+60,state:'proposed',spec:{kind:'obtain',item:'oak_log',count:8,deliver:false}};
