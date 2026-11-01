@@ -28,6 +28,12 @@ async function startPersonaTransport({getSession,token,port=8766}){
   const api=getSession()?.persona;if(!api)return reply(503,{error:'no_session'});
   try{
    const url=new URL(req.url,'http://127.0.0.1');
+   if(req.method==='POST'&&url.pathname==='/voice/session/refresh'){
+    const id=req.headers['x-persona-session'];
+    if(typeof id!=='string'||id!==api.sessionId)return reply(409,{error:'stale_session'});
+    const status=getSession()?.refreshVoice?.(id)||'voice_unavailable';
+    return reply(status==='pending'?202:status==='rate_limited'?429:status==='stale_session'?409:503,status==='pending'?{status}:{error:status});
+   }
    if(req.method==='GET'&&url.pathname==='/voice/session'){const voice=getSession()?.voiceSession?.();return voice?reply(200,voice):reply(503,{error:'voice_unavailable'});}
    if(req.method==='GET'&&url.pathname==='/snapshot')return reply(200,api.snapshot());
    if(req.method==='GET'&&url.pathname==='/events'){

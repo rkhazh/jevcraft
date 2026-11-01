@@ -1,8 +1,12 @@
 """Isolated bounded community profile. Does not register accounts or run admin commands."""
 import os
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import dotenv_values
+parser=argparse.ArgumentParser()
+parser.add_argument('--voice',action='store_true',help='Enable SVC handshake and authenticated voice metadata')
+args=parser.parse_args()
 root=Path(__file__).resolve().parents[2]
 profile=root/'setup/jevcraft-community'
 private=dotenv_values(profile/'private.env')
@@ -14,7 +18,7 @@ for k in ['MC_LOGIN_PASSWORD','JEV_PERSONA_TOKEN']:
  if not private.get(k): raise SystemExit(f'Missing community configuration: {k}')
  env[k]=private[k]
 if private.get('MC_LOGIN_SUCCESS_TEXT'): env['MC_LOGIN_SUCCESS_TEXT']=private['MC_LOGIN_SUCCESS_TEXT']
-env.update(OPENROUTER_API_KEY=key,JEV_COMMUNITY_SECONDS='600',JEV_COMMUNITY_HTTP_LIMIT='60',JEV_PERSONA_ITEMS='oak_log,spruce_log,birch_log,cobblestone,crafting_table,wooden_pickaxe,stone_pickaxe,coal,torch,oak_planks,spruce_planks,birch_planks,stick,furnace,raw_iron,iron_ingot,iron_pickaxe,stone_axe,bread,cooked_beef,charcoal')
+env.update(JEV_SVC_ENABLED='1' if args.voice else '0',OPENROUTER_API_KEY=key,JEV_COMMUNITY_SECONDS='600',JEV_COMMUNITY_HTTP_LIMIT='60',JEV_PERSONA_ITEMS='oak_log,spruce_log,birch_log,cobblestone,crafting_table,wooden_pickaxe,stone_pickaxe,coal,torch,oak_planks,spruce_planks,birch_planks,stick,furnace,raw_iron,iron_ingot,iron_pickaxe,stone_axe,bread,cooked_beef,charcoal')
 run=profile/'runs'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
 run.parent.mkdir(parents=True,exist_ok=True)
 env['JEV_COMMUNITY_RUN_DIRECTORY']=str(run)

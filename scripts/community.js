@@ -13,7 +13,7 @@ async function main(){
  for(const method of ['log','warn','error']){const original=console[method];console[method]=(...args)=>original(...args.map(x=>String(x).split(password).join('[redacted]')));}
  fs.mkdirSync(directory,{recursive:false,mode:0o700});
  // Lock profile options even if the shell inherited local experiment settings.
- Object.assign(process.env,{JEV_SVC_ENABLED:'1',JEV_SVC_PROTOCOL:'20',JEV_PROVIDER:'openrouter',OPENROUTER_JEV_MODEL:'typesafe/jev-1.14',MC_WORLD_ID:'agicraft-community-1_21_11',JEV_PERSONA_MODE:'1',JEV_PERSONA_BUILD:'0',JEV_NO_QUIET_RESTART:'1',MC_COMMAND_USERS:'',JEV_PERSONA_PLAYERS:'',JEV_PERSONA_PORT:'8769'});
+ Object.assign(process.env,{JEV_SVC_ENABLED:process.env.JEV_SVC_ENABLED==='1'?'1':'0',JEV_SVC_PROTOCOL:'20',JEV_PROVIDER:'openrouter',OPENROUTER_JEV_MODEL:'typesafe/jev-1.14',MC_WORLD_ID:'agicraft-community-1_21_11',JEV_PERSONA_MODE:'1',JEV_PERSONA_BUILD:'0',JEV_NO_QUIET_RESTART:'1',MC_COMMAND_USERS:'',JEV_PERSONA_PLAYERS:'',JEV_PERSONA_PORT:'8769'});
  let session,server,timer,killTimer;let stopped=false;
  function stop(reason){if(stopped)return;stopped=true;console.log(JSON.stringify({communityStop:reason}));session?.shutdown();killTimer=setTimeout(()=>process.exit(1),5000);killTimer.unref();}
  const budget=new AttemptBudget(limit,{record:event=>fs.appendFileSync(path.join(directory,'http-attempts.jsonl'),JSON.stringify(event)+'\n',{mode:0o600}),onExhausted:()=>stop('HTTP attempt cap reached')});

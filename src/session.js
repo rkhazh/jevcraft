@@ -875,7 +875,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       lastSpeech=Date.now();bot.chat(text);
     };
   }
-  return { bot, persona, closed, voiceSession(){return ready&&!ended&&persona?voice?.read(persona.sessionId)??null:null;}, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
+  return { bot, persona, closed, refreshVoice(sessionId){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||bot.game?.gameMode!=='survival'||!voice)return 'voice_unavailable';return voice.refresh();}, voiceSession(){return ready&&!ended&&persona?voice?.read(persona.sessionId)??null:null;}, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
 }
 
 module.exports = { unworkable, createSession };

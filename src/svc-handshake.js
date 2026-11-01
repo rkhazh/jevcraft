@@ -15,17 +15,18 @@ function parseSecret(data,protocol,mcHost,expectedUuid){
  if(!host||port<1||port>65535)throw new Error('Invalid voice endpoint');
  return {bot_uuid,protocol,secret,connection_id,host,port,codec,mtu,keep_alive};
 }
-function installSvcHandshake(bot,config,{preferred=21,delayMs=2500}={}){
- let current=null,generation=randomUUID(),timer=null,active=false,closed=false;const attempted=new Set();
+function installSvcHandshake(bot,config,{preferred=21,delayMs=2500,now=()=>performance.now()}={}){
+ let current=null,generation=randomUUID(),timer=null,active=false,closed=false,lastRequested=-Infinity;const attempted=new Set();
  function reset(){current=null;generation=randomUUID();active=false;attempted.clear();clearTimeout(timer)}
  function request(protocol){if(closed||!active)return;attempted.add(protocol);const payload=Buffer.alloc(4);payload.writeInt32BE(protocol);bot._client.write('custom_payload',{channel:'voicechat:request_secret',data:payload});}
  function receive(packet){if(!active||closed||packet.channel!=='voicechat:secret')return;
   for(const protocol of attempted){try{const parsed=parseSecret(packet.data,protocol,config.host,bot.player?.uuid||bot._client.uuid);current=parsed;clearTimeout(timer);return;}catch{}}
  }
  bot._client.on('custom_payload',receive);bot.on('respawn',reset);bot.once('end',()=>{closed=true;reset();bot._client.removeListener('custom_payload',receive)});
- return {start(){if(closed)return;reset();active=true;try{
+ function start(){if(closed)return;lastRequested=now();reset();active=true;try{
    bot._client.write('custom_payload',{channel:'minecraft:register',data:Buffer.from('voicechat:secret\0voicechat:request_secret')});
    request(preferred);timer=setTimeout(()=>{if(!current){try{request(preferred===20?21:20)}catch{reset()}}},delayMs);timer.unref?.();
-  }catch{reset()}},reset,read(session_id){return active&&!closed&&current?{session_id,generation,...current}:null}};
+  }catch{reset()}}
+ return {start,refresh(){if(closed)return 'voice_unavailable';if(now()-lastRequested<10000)return 'rate_limited';start();return active?'pending':'voice_unavailable';},reset,read(session_id){return active&&!closed&&current?{session_id,generation,...current}:null}};
 }
 module.exports={parseSecret,installSvcHandshake};

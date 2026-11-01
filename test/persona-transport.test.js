@@ -28,3 +28,9 @@ test('voice secrets require same authorization and origin protection; stale stat
  const response=await fetch(url,{headers});assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');assert.equal((await response.json()).secret,'private-value');assert.equal(snapshots,0);voice=null;assert.equal((await fetch(url,{headers})).status,503);
  }finally{await new Promise(r=>server.close(r))}
 });
+test('voice refresh requires bearer and exact current session header; returns bounded status only',async()=>{
+ let calls=0,status='pending';const server=await startPersonaTransport({port:0,token:'c'.repeat(40),getSession:()=>({persona:{sessionId:'current'},refreshVoice(id){assert.equal(id,'current');calls++;return status;}})});
+ const url=`http://127.0.0.1:${server.address().port}/voice/session/refresh`,headers={Authorization:'Bearer '+'c'.repeat(40),'X-Persona-Session':'current'};
+ try{assert.equal((await fetch(url,{method:'POST'})).status,401);assert.equal((await fetch(url,{method:'POST',headers:{...headers,'X-Persona-Session':'old'}})).status,409);assert.equal(calls,0);const r=await fetch(url,{method:'POST',headers});assert.equal(r.status,202);assert.deepEqual(await r.json(),{status:'pending'});status='rate_limited';assert.equal((await fetch(url,{method:'POST',headers})).status,429);status='voice_unavailable';assert.equal((await fetch(url,{method:'POST',headers})).status,503);
+ }finally{await new Promise(r=>server.close(r))}
+});

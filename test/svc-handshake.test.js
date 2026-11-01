@@ -18,3 +18,8 @@ test('handshake bounded fallback; respawn and disconnect clear secrets and rejec
  b.emit('respawn');assert.equal(s.read('session'),null);b._client.emit('custom_payload',{channel:'voicechat:secret',data:packet(20)});assert.equal(s.read('session'),null);
  s.start();b._client.emit('custom_payload',{channel:'voicechat:secret',data:packet(20)});assert.notEqual(s.read('session').generation,first.generation);b.emit('end');assert.equal(s.read('session'),null);s.start();assert.equal(s.read('session'),null);
 });
+test('refresh clears credentials, rate limits requests and cannot revive closed connection',()=>{
+ let clock=0;const b=new EventEmitter();b.player={uuid};b._client=new EventEmitter();const writes=[];b._client.write=(n,p)=>writes.push(p);
+ const s=installSvcHandshake(b,{host:'mc.agicraft.ru'},{preferred:20,now:()=>clock});s.start();b._client.emit('custom_payload',{channel:'voicechat:secret',data:packet(20)});const old=s.read('s');assert.ok(old);assert.equal(s.refresh(),'rate_limited');assert.equal(writes.length,2);
+ clock=10000;assert.equal(s.refresh(),'pending');assert.equal(s.read('s'),null);assert.equal(writes.length,4);assert.equal(s.refresh(),'rate_limited');b._client.emit('custom_payload',{channel:'voicechat:secret',data:packet(20)});assert.notEqual(s.read('s').generation,old.generation);b.emit('end');clock=20000;assert.equal(s.refresh(),'voice_unavailable');assert.equal(writes.length,4);
+});
