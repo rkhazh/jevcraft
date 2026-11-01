@@ -10,7 +10,7 @@ const Module=require('node:module');
 test('real session routes typed goal, rejects chat bypass, cancels without pausing survival',async()=>{
  const bot=new EventEmitter();bot._client=new EventEmitter();Object.assign(bot,{
   loadPlugin(){},username:'Skipper',version:'26.1',health:20,food:20,isAlive:true,
-  game:{dimension:'overworld',gameMode:'creative'},time:{timeOfDay:1000},players:{Alex:{uuid:'a',username:'Alex',entity:{position:{x:0,y:64,z:0}}}},entities:{},
+  game:{dimension:'overworld',gameMode:'creative'},time:{timeOfDay:1000},players:{Alex:{uuid:'00000000-0000-4000-8000-000000000001',username:'Alex',entity:{position:{x:0,y:64,z:0}}}},entities:{},
   entity:{position:{x:0,y:64,z:0}},inventory:{items:()=>[]},pathfinder:{setGoal(){}},clearControlStates(){},stopDigging(){},deactivateItem(){},
   chat(){},quit(){bot.emit('end','quit')},waitForChunksToLoad:async()=>{},
  });
@@ -34,10 +34,12 @@ test('real session routes typed goal, rejects chat bypass, cancels without pausi
  const dir=mkdtempSync(join(tmpdir(),'jev-session-'));let session;
  try{
   const {createSession}=require('../src/session');session=createSession({host:'localhost',port:25565,username:'Skipper'},{},{stateDirectory:dir,runLedger:null});
+  assert.deepEqual(session.persona.snapshot().player_identities,[]);
   bot.emit('spawn');await new Promise(r=>setTimeout(r,30));
   assert.equal(session.persona.snapshot().connected,true);assert.deepEqual(session.persona.snapshot().nearby_entities,[]);assert.equal(session.persona.snapshot().ground_block,null);assert.ok(spoken.some(t=>t.includes('ready to chat')));assert.ok(!spoken.some(t=>t.includes('Call me Jev')));
-  bot._client.emit('playerChat',{sender:'a',plainMessage:'Skipper get me 8 oak logs'});
+  bot._client.emit('playerChat',{sender:'00000000-0000-4000-8000-000000000001',plainMessage:'Skipper get me 8 oak logs'});
   await new Promise(r=>setTimeout(r,10));assert.equal(starts,0);assert.equal(session.persona.events(0).events.at(-1).type,'chat');
+  const rosterSnapshot=session.persona.snapshot();assert.deepEqual(rosterSnapshot.player_identities,[{uuid:'00000000-0000-4000-8000-000000000001',name:'Alex'}]);assert.ok(Number.isFinite(rosterSnapshot.observed_at));assert.notEqual(rosterSnapshot.observation_id,session.persona.snapshot().observation_id);
   const s=session.persona.snapshot(),p={schema_version:1,goal_id:randomUUID(),persona_id:'skipper',session_id:s.session_id,observation_id:s.observation_id,issued_at:Date.now()/1000,expires_at:Date.now()/1000+60,state:'proposed',spec:{kind:'obtain',item:'oak_log',count:8,deliver:false}};
   assert.equal((await session.persona.submit(p)).status,'accepted');await new Promise(r=>setImmediate(r));assert.equal(starts,1);
   await session.persona.cancel(p.goal_id);assert.equal(survival.state.paused,false);
@@ -46,5 +48,6 @@ test('real session routes typed goal, rejects chat bypass, cancels without pausi
   assert.equal((await session.persona.submit(next)).status,'accepted');await new Promise(r=>setTimeout(r,20));
   const before=starts;await session.persona.cancel(next.goal_id);await new Promise(r=>setTimeout(r,1600));
   assert.equal(starts,before,'cancelled goal cannot relaunch after a tactical danger retry');
+  session.shutdown();await session.closed;assert.deepEqual(session.persona.snapshot().player_identities,[]);
  }finally{session?.shutdown();await session?.closed;Module._load=original;process.env=oldEnv;rmSync(dir,{recursive:true,force:true});}
 });

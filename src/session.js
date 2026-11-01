@@ -841,6 +841,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         build_capabilities:buildApi.capabilities(bot,buildEnabled),builds:buildApi.describeBuilds(bot),
         build_progress:active?.goal?.kind==='build'?{build_id:active.goal.buildId||null,phase:active.goal.buildPhase||active.goal.step?.action||'pending',placements_recorded:Object.keys(active.goal.buildOwned||{}).length,planned_blocks:active.goal.blueprint?.blocks?.length||null}:null,connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
         dimension:bot.game?.dimension || 'unknown',version:bot.version || null,bot_uuid:bot.player?.uuid || null,
+        player_identities:ready && !ended ? require('./persona-roster').playerIdentities(bot) : [],
         position:position(bot.entity?.position),
         player_positions:Object.fromEntries(Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).slice(0,128).map(p=>[p.username,position(p.entity.position)])),
         items:Object.keys(bot.registry?.itemsByName || {}),
