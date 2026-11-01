@@ -50,13 +50,14 @@ function unworkable(bot, spec) {
 }
 
 function createSession(config, client, { stateDirectory = path.join(__dirname, '..', '.bot-state'), recorder,
-  runLedger = path.join(stateDirectory, 'run-ledger.md') } = {}) {
+  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate } = {}) {
   const externalPersona = process.env.JEV_PERSONA_MODE === '1';
   let persona = null;
   let ended = false, spawned = false, resolveClosed;
   const connectedAt = Date.now();
   const closed = new Promise(resolve => { resolveClosed = resolve; });
   const bot = mineflayer.createBot({ ...config, respawn: false });
+  const authentication = authenticate?.(bot, config);
   global.__jevBot = bot;
   // The damage types by index, from the registry the server sends before
   // login, for the flight record's damage frames (recorder/observer.js).
@@ -715,6 +716,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
 
   bot.once('spawn', async () => {
     try {
+      if (authentication) { await authentication.ready; if (ended) return; bot.physicsEnabled = true; }
       spawned = true;
       configureMovements(bot);
       console.log(`[bot] spawned as ${bot.username} (${bot.version})`);

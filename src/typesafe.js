@@ -71,7 +71,7 @@ function pickByDistribution(response) {
 
 class TypeSafe {
   constructor({ provider = process.env.JEV_PROVIDER || (process.env.TYPESAFE_API_KEY ? 'typesafe' : process.env.OPENROUTER_API_KEY ? 'openrouter' : 'typesafe'),
-    apiKey, model, timeout = 10000, maxRetries = 2 } = {}) {
+    apiKey, model, timeout = 10000, maxRetries = 2, attemptBudget } = {}) {
     if (!['typesafe', 'openrouter'].includes(provider)) throw new TypeSafeError('JEV_PROVIDER must be typesafe or openrouter');
     apiKey ??= provider === 'openrouter' ? process.env.OPENROUTER_API_KEY : process.env.TYPESAFE_API_KEY;
     model ??= provider === 'openrouter' ? process.env.OPENROUTER_JEV_MODEL || 'typesafe/jev-1.13' : MODEL;
@@ -86,6 +86,7 @@ class TypeSafe {
     this.model = model;
     this.timeout = timeout;
     this.maxRetries = maxRetries;
+    this.attemptBudget = attemptBudget;
   }
 
   // Ask a batch of questions about one state. Every question is answered
@@ -153,6 +154,7 @@ class TypeSafe {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeout);
       try {
+        this.attemptBudget?.reserve();
         stage(trace, 'sent', attempt ? { attempt } : { chars: body.length });
         const res = await fetch(this.endpoint, {
           method: 'POST',
@@ -188,7 +190,7 @@ class TypeSafe {
         stage(trace, 'failed', { error: String(err?.name || err).slice(0, 40), aborted: !!signal?.aborted });
         signal?.throwIfAborted();
         // Timeouts and connection failures are worth another attempt; a 4xx is not.
-        if (err instanceof TypeSafeError && !RETRY_STATUSES.has(err.status)) throw err;
+        if (err.terminal || (err instanceof TypeSafeError && !RETRY_STATUSES.has(err.status))) throw err;
         lastErr = err;
         if (attempt >= this.maxRetries) throw err;
       } finally {
