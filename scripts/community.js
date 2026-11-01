@@ -23,6 +23,7 @@ async function main(){
  timer=setTimeout(()=>stop('600-second maximum elapsed'),seconds*1000);
  try{
   session=createSession(config,client,{stateDirectory:path.join(directory,'state'),authenticate:(bot,cfg)=>communityAuth(bot,cfg,{password,successText:process.env.MC_LOGIN_SUCCESS_TEXT})});
+  client.ledger=require('../src/http-usage-ledger').attachHttpUsageLedger(client.ledger,path.join(directory,'http-usage.jsonl'),{maxEntries:limit,onError:()=>stop('HTTP usage ledger unavailable')});
   server=await require('../src/persona-transport').startPersonaTransport({getSession:()=>session,token:process.env.JEV_PERSONA_TOKEN,port:8769});
   const outcome=await session.closed;console.log(JSON.stringify({communityClosed:outcome,httpAttempts:budget.used,httpLimit:limit}));
  }finally{clearTimeout(timer);clearTimeout(killTimer);session?.shutdown();if(server)await new Promise(resolve=>server.close(resolve));}

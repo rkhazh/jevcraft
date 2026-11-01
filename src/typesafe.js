@@ -151,10 +151,12 @@ class TypeSafe {
         await require('node:timers/promises').setTimeout(backoff * (1 - Math.random() * 0.25), undefined, { signal });
       }
 
+      let dispatch = null;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeout);
       try {
         this.attemptBudget?.reserve();
+        dispatch = { attempt: (this.httpAttemptSequence = (this.httpAttemptSequence || 0) + 1), started: performance.now(), ok: false };
         stage(trace, 'sent', attempt ? { attempt } : { chars: body.length });
         const res = await fetch(this.endpoint, {
           method: 'POST',
@@ -166,12 +168,14 @@ class TypeSafe {
           signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
         });
 
+        dispatch.status = res.status;
         const requestId = res.headers.get('x-request-id') || undefined;
         stage(trace, 'headers', { status: res.status, ...(requestId ? { requestId } : {}) });
         const text = await res.text();
         stage(trace, 'body', { bytes: text.length });
 
         if (!res.ok) {
+          try { dispatch.usage = JSON.parse(text)?.usage; } catch {}
           const err = new TypeSafeError(
             `TypeSafe ${res.status}: ${text.slice(0, 500)}`,
             { status: res.status, requestId, body: text },
@@ -184,6 +188,7 @@ class TypeSafe {
         }
 
         const parsed = pickByDistribution(JSON.parse(text));
+        dispatch.usage = parsed?.usage; dispatch.ok = true;
         stage(trace, 'parsed');
         return parsed;
       } catch (err) {
@@ -195,6 +200,9 @@ class TypeSafe {
         if (attempt >= this.maxRetries) throw err;
       } finally {
         clearTimeout(timer);
+        if (dispatch && this.ledger?.recordAttempt) {
+          try { this.ledger.recordAttempt({...dispatch, latencyMs: performance.now()-dispatch.started, aborted: !!signal?.aborted || controller.signal.aborted}); } catch { console.error('[ledger] HTTP usage recording failed'); }
+        }
       }
     }
 

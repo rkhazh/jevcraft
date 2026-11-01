@@ -15,3 +15,9 @@ Each launch creates new private `runs/<UTC timestamp>/state` and `runs/<UTC time
 Jev1.14 is explicit. Default local launchers and deadlines remain unchanged. The body's logical-call ledger does not count retry dispatches; use this profile's attempt audit for the hard limit. Requests already in flight at shutdown can finish server-side; no new dispatch can exceed the cap.
 
 `MC_LOGIN_SUCCESS_TEXT` is optional diagnostic authentication acknowledgement; it never releases gameplay by itself. Lobby messages never satisfy readiness. Installed Mineflayer4.39.0 / minecraft-protocol1.68.0 / minecraft-data3.116.0 / prismarine-chunk1.41.0 recognize Minecraft1.21.11 protocol774; transient backend/decoder failures are not suppressed.
+
+## HTTP usage evidence (future launches)
+
+`http-usage.jsonl` records at most 60 actual dispatch outcomes, including retry responses, network failures and cancellation. Each allowlisted row contains attempt number, timestamp, HTTP status (null without headers), success/abort flags, latency, reported input/output tokens and cost. It excludes prompts, state, response bodies, credentials and provider error text. Existing logical-call ledger accounting remains unchanged. Usage-ledger write failure stops the community session.
+
+`cost_usd: null` / `charge_known: false` means unknown, never free. Timeouts, disconnects, aborted calls, missing usage, or process termination can still incur provider charges. Compare attempt audit counts against outcome rows to identify unfinished requests. Sum known costs only as reported charges, not a complete billed total; reconcile unknowns with the provider dashboard. The 60-attempt ceiling is unchanged and is not a dollar cap. Persona-model calls are separate.
