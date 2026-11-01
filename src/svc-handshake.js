@@ -16,17 +16,27 @@ function parseSecret(data,protocol,mcHost,expectedUuid){
  return {bot_uuid,protocol,secret,connection_id,host,port,codec,mtu,keep_alive};
 }
 function installSvcHandshake(bot,config,{preferred=21,delayMs=2500,now=()=>performance.now()}={}){
- let current=null,generation=randomUUID(),timer=null,active=false,closed=false,lastRequested=-Infinity;const attempted=new Set();
- function reset(){current=null;generation=randomUUID();active=false;attempted.clear();clearTimeout(timer)}
+ let current=null,generation=randomUUID(),timer=null,active=false,closed=false,lastRequested=-Infinity,lastState=null,stateWindow=0,stateWrites=0;const attempted=new Set();
+ function reset(){lastState=null;current=null;generation=randomUUID();active=false;attempted.clear();clearTimeout(timer)}
  function request(protocol){if(closed||!active)return;attempted.add(protocol);const payload=Buffer.alloc(4);payload.writeInt32BE(protocol);bot._client.write('custom_payload',{channel:'voicechat:request_secret',data:payload});}
  function receive(packet){if(!active||closed||packet.channel!=='voicechat:secret')return;
-  for(const protocol of attempted){try{const parsed=parseSecret(packet.data,protocol,config.host,bot.player?.uuid||bot._client.uuid);current=parsed;clearTimeout(timer);return;}catch{}}
+  for(const protocol of attempted){try{const parsed=parseSecret(packet.data,protocol,config.host,bot.player?.uuid||bot._client.uuid);sendState(true,true);current=parsed;clearTimeout(timer);return;}catch{}}
+ }
+ function sendState(muted,disabled){bot._client.write('custom_payload',{channel:'voicechat:client_state',data:Buffer.from([Number(muted),Number(disabled)])});lastState={muted,disabled};}
+ function setState(expectedGeneration,{muted,disabled}){
+  if(closed||!active||!current)return 'voice_unavailable';
+  if(expectedGeneration!==generation)return 'stale_generation';
+  if(typeof muted!=='boolean'||typeof disabled!=='boolean')return 'invalid_state';
+  if(lastState?.muted===muted&&lastState?.disabled===disabled)return 'updated';
+  if(now()-stateWindow>=1000){stateWindow=now();stateWrites=0;}
+  if(stateWrites>=10)return 'rate_limited';
+  try{sendState(muted,disabled);stateWrites++;return 'updated';}catch{reset();return 'voice_unavailable';}
  }
  bot._client.on('custom_payload',receive);bot.on('respawn',reset);bot.once('end',()=>{closed=true;reset();bot._client.removeListener('custom_payload',receive)});
  function start(){if(closed)return;lastRequested=now();reset();active=true;try{
-   bot._client.write('custom_payload',{channel:'minecraft:register',data:Buffer.from('voicechat:secret\0voicechat:request_secret')});
+   bot._client.write('custom_payload',{channel:'minecraft:register',data:Buffer.from('voicechat:secret\0voicechat:request_secret\0voicechat:client_state')});
    request(preferred);timer=setTimeout(()=>{if(!current){try{request(preferred===20?21:20)}catch{reset()}}},delayMs);timer.unref?.();
   }catch{reset()}}
- return {start,refresh(){if(closed)return 'voice_unavailable';if(now()-lastRequested<10000)return 'rate_limited';start();return active?'pending':'voice_unavailable';},reset,read(session_id){return active&&!closed&&current?{session_id,generation,...current}:null}};
+ return {start,setState,refresh(){if(closed)return 'voice_unavailable';if(now()-lastRequested<10000)return 'rate_limited';start();return active?'pending':'voice_unavailable';},reset,read(session_id){return active&&!closed&&current?{session_id,generation,...current}:null}};
 }
 module.exports={parseSecret,installSvcHandshake};

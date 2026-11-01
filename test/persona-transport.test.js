@@ -34,3 +34,11 @@ test('voice refresh requires bearer and exact current session header; returns bo
  try{assert.equal((await fetch(url,{method:'POST'})).status,401);assert.equal((await fetch(url,{method:'POST',headers:{...headers,'X-Persona-Session':'old'}})).status,409);assert.equal(calls,0);const r=await fetch(url,{method:'POST',headers});assert.equal(r.status,202);assert.deepEqual(await r.json(),{status:'pending'});status='rate_limited';assert.equal((await fetch(url,{method:'POST',headers})).status,429);status='voice_unavailable';assert.equal((await fetch(url,{method:'POST',headers})).status,503);
  }finally{await new Promise(r=>server.close(r))}
 });
+test('voice state validates exact booleans and fences session/generation before TCP mutation',async()=>{
+ let calls=0;const server=await startPersonaTransport({port:0,token:'d'.repeat(40),getSession:()=>({persona:{sessionId:'current'},setVoiceState(id,generation,state){if(generation!=='fresh')return 'stale_generation';calls++;assert.deepEqual(state,{muted:true,disabled:false});return 'updated';}})});
+ const url=`http://127.0.0.1:${server.address().port}/voice/state`,headers={Authorization:'Bearer '+'d'.repeat(40),'X-Persona-Session':'current','X-Voice-Generation':'fresh','Content-Type':'application/json'},body=JSON.stringify({muted:true,disabled:false});
+ try{assert.equal((await fetch(url,{method:'POST',headers:{...headers,'X-Persona-Session':'old'},body})).status,409);assert.equal((await fetch(url,{method:'POST',headers:{...headers,'X-Voice-Generation':'old'},body})).status,409);assert.equal(calls,0);
+ for(const bad of [{muted:1,disabled:false},{muted:false,disabled:false,secret:'reject'}])assert.equal((await fetch(url,{method:'POST',headers,body:JSON.stringify(bad)})).status,400);assert.equal(calls,0);
+ const r=await fetch(url,{method:'POST',headers,body});assert.equal(r.status,200);assert.deepEqual(await r.json(),{status:'updated'});assert.equal(calls,1);
+ }finally{await new Promise(r=>server.close(r))}
+});

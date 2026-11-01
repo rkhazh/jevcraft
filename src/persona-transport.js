@@ -39,9 +39,17 @@ async function startPersonaTransport({getSession,token,port=8766}){
    if(req.method==='GET'&&url.pathname==='/events'){
     const after=Number(url.searchParams.get('after')||0);if(!Number.isSafeInteger(after)||after<0)return reply(400,{error:'invalid_cursor'});return reply(200,api.events(after));
    }
-   if(req.method!=='POST'||!['/goal','/cancel','/chat'].includes(url.pathname))return reply(404,{error:'not_found'});
+   if(req.method!=='POST'||!['/goal','/cancel','/chat','/voice/state'].includes(url.pathname))return reply(404,{error:'not_found'});
    let size=0, chunks=[];for await(const chunk of req){size+=chunk.length;if(size>32768){reply(413,{error:'payload_too_large'});req.resume();return;}chunks.push(chunk);}
    const data=parseStrict(Buffer.concat(chunks).toString('utf8'));
+   if(url.pathname==='/voice/state'){
+    const id=req.headers['x-persona-session'],generation=req.headers['x-voice-generation'];
+    if(typeof id!=='string'||id!==api.sessionId)return reply(409,{error:'stale_session'});
+    if(typeof generation!=='string'||!generation)return reply(409,{error:'stale_generation'});
+    if(!exact(data,['muted','disabled'])||typeof data.muted!=='boolean'||typeof data.disabled!=='boolean')return reply(400,{error:'invalid_state'});
+    const status=getSession()?.setVoiceState?.(id,generation,data)||'voice_unavailable';
+    return reply(status==='updated'?200:status==='rate_limited'?429:status.startsWith('stale_')?409:503,status==='updated'?{status}:{error:status});
+   }
    if(url.pathname==='/goal')return reply(200,await api.submit(data));
    if(url.pathname==='/cancel'){if(!exact(data,['goal_id'])||typeof data.goal_id!=='string')return reply(400,{error:'invalid_cancel'});return reply(200,await api.cancel(data.goal_id));}
    if(!exact(data,['text'])||!plainSpeech(data.text))return reply(400,{error:'plain_speech_required'});
