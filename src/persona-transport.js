@@ -28,6 +28,7 @@ async function startPersonaTransport({getSession,token,port=8766}){
   const api=getSession()?.persona;if(!api)return reply(503,{error:'no_session'});
   try{
    const url=new URL(req.url,'http://127.0.0.1');
+   if(req.method==='GET'&&url.pathname==='/voice/session'){const voice=getSession()?.voiceSession?.();return voice?reply(200,voice):reply(503,{error:'voice_unavailable'});}
    if(req.method==='GET'&&url.pathname==='/snapshot')return reply(200,api.snapshot());
    if(req.method==='GET'&&url.pathname==='/events'){
     const after=Number(url.searchParams.get('after')||0);if(!Number.isSafeInteger(after)||after<0)return reply(400,{error:'invalid_cursor'});return reply(200,api.events(after));

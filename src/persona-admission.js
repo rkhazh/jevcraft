@@ -52,7 +52,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   if(!valid(p.goal_id)){await cancelNow(p.goal_id,'expired');return rejection(p,'expired');}
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:p.expires_at};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
  }
- return {snapshot,valid,emit,submit:p=>enqueue(()=>submitNow(p)),cancel:id=>enqueue(()=>cancelNow(id)),
+ return {get sessionId(){return sessionId;},snapshot,valid,emit,submit:p=>enqueue(()=>submitNow(p)),cancel:id=>enqueue(()=>cancelNow(id)),
   events(after) {
    const pending=log.filter(e=>e.sequence>after);
    const packet={events:[],cursor:after,oldest_sequence:log[0]?.sequence??sequence,has_more:false};

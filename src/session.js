@@ -58,6 +58,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   const closed = new Promise(resolve => { resolveClosed = resolve; });
   const bot = mineflayer.createBot({ ...config, respawn: false });
   const authentication = authenticate?.(bot, config);
+  const voice = process.env.JEV_SVC_ENABLED === '1' ? require('./svc-handshake').installSvcHandshake(bot,config,{preferred:process.env.JEV_SVC_PROTOCOL==='20'?20:21}) : null;
   global.__jevBot = bot;
   // The damage types by index, from the registry the server sends before
   // login, for the flight record's damage frames (recorder/observer.js).
@@ -740,6 +741,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       catch (err) { console.error('[join] reading the ground:', err.message); }
       if (ended || !bot.isAlive) return;
       ready = true;
+      voice?.start();
       console.log(JSON.stringify({ sessionReady: true, username: bot.username }));
       const saved = store.read();
       if (!externalPersona && saved && ['running', 'recovering'].includes(saved.status) && !survival.state.paused) {
@@ -799,7 +801,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   function close(reason) {
     if (ended) return;
     observation?.detach(String(reason || 'connection closed'));
-    ready = false; clearInterval(idleTimer); invalidateRequests();
+    ready = false; voice?.reset(); clearInterval(idleTimer); invalidateRequests();
     persona?.close().catch(console.error);
     if (active && !active.task.cancelled) stop('running').catch(console.error);
     // This connection's saves on disk before a replacement reads state (note 2042): the survival store's save waits up to
@@ -873,7 +875,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       lastSpeech=Date.now();bot.chat(text);
     };
   }
-  return { bot, persona, closed, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
+  return { bot, persona, closed, voiceSession(){return ready&&!ended&&persona?voice?.read(persona.sessionId)??null:null;}, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
 }
 
 module.exports = { unworkable, createSession };
