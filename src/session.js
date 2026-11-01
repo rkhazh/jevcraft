@@ -716,7 +716,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
 
   bot.once('spawn', async () => {
     try {
-      if (authentication) { await authentication.ready; if (ended) return; bot.physicsEnabled = true; }
+      if (authentication) { await authentication.ready; if (ended) return; authentication.assertGameplay?.(); bot.physicsEnabled = true; }
       spawned = true;
       configureMovements(bot);
       console.log(`[bot] spawned as ${bot.username} (${bot.version})`);

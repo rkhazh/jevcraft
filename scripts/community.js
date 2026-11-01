@@ -8,7 +8,7 @@ async function main(){
  if(!directory||!path.isAbsolute(directory))throw new Error('Community run directory required');
  const seconds=Number(process.env.JEV_COMMUNITY_SECONDS||600),limit=Number(process.env.JEV_COMMUNITY_HTTP_LIMIT||60);
  if(!Number.isInteger(seconds)||seconds<1||seconds>600||!Number.isInteger(limit)||limit<1||limit>60)throw new Error('Community bounds exceed first-run policy');
- if(!process.env.MC_LOGIN_PASSWORD||!process.env.MC_LOGIN_SUCCESS_TEXT||!process.env.JEV_PERSONA_TOKEN)throw new Error('Community authentication/token configuration incomplete');
+ if(!process.env.MC_LOGIN_PASSWORD||!process.env.JEV_PERSONA_TOKEN)throw new Error('Community authentication/token configuration incomplete');
  const password=process.env.MC_LOGIN_PASSWORD;
  for(const method of ['log','warn','error']){const original=console[method];console[method]=(...args)=>original(...args.map(x=>String(x).split(password).join('[redacted]')));}
  fs.mkdirSync(directory,{recursive:false,mode:0o700});

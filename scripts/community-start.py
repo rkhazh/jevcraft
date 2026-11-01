@@ -10,9 +10,10 @@ key=private.get('OPENROUTER_API_KEY') or dotenv_values(root/'NetTyan/.env').get(
 if not key: raise SystemExit('Configured OpenRouter key unavailable')
 # Deliberately do not inherit local house goals, voice endpoints or profile settings.
 env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','TMPDIR','LANG','LC_ALL'}}
-for k in ['MC_LOGIN_PASSWORD','MC_LOGIN_SUCCESS_TEXT','JEV_PERSONA_TOKEN']:
+for k in ['MC_LOGIN_PASSWORD','JEV_PERSONA_TOKEN']:
  if not private.get(k): raise SystemExit(f'Missing community configuration: {k}')
  env[k]=private[k]
+if private.get('MC_LOGIN_SUCCESS_TEXT'): env['MC_LOGIN_SUCCESS_TEXT']=private['MC_LOGIN_SUCCESS_TEXT']
 env.update(OPENROUTER_API_KEY=key,JEV_COMMUNITY_SECONDS='600',JEV_COMMUNITY_HTTP_LIMIT='60',JEV_PERSONA_ITEMS='oak_log,spruce_log,birch_log,cobblestone,crafting_table,wooden_pickaxe,stone_pickaxe,coal,torch,oak_planks,spruce_planks,birch_planks,stick,furnace,raw_iron,iron_ingot,iron_pickaxe,stone_axe,bread,cooked_beef,charcoal')
 run=profile/'runs'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
 run.parent.mkdir(parents=True,exist_ok=True)
