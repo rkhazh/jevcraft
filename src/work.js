@@ -5085,7 +5085,8 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     // own if the ground does not turn out to hold the building.
     const owned = goal.personaBuildPolicy && edited ? require('./persona-build').verifiedEditOwnership(bot,edited) : registry?.claimed(dimensionName(bot), edited ? undefined : goal.buildId);
     // Everything Jev built except the building being changed stays standing.
-    const protect = registry?.claimed(dimensionName(bot), edited ? edited.id : goal.buildId);
+    const protect = goal.personaBuildPolicy && edited ? registry.editProtection(bot, edited) :
+      registry?.claimed(dimensionName(bot), edited ? edited.id : goal.buildId);
     const here = bot.entity.position.floored();
     const proposed = !goal.buildAnchor && !at && schematic.site
       ? { x: here.x + schematic.site[0], y: here.y + schematic.site[1], z: here.z + schematic.site[2] } : null;
