@@ -13,7 +13,10 @@ function installPersonaChat(bot,{community=false,ready=()=>true,emit,now=Date.no
   for(const [k,v]of recent)if(at-v.at>1500)recent.delete(k);
   if(last&&last.source!==source&&at-last.at<1500)return;
   if(recent.size>=128)recent.delete(recent.keys().next().value);
-  recent.set(key,{source,at});emit({type:'chat',user,msg,sender_uuid:uuid,source,operator_authorized:source==='player_chat'});
+  recent.set(key,{source,at});
+  const player=Object.values(bot.players||{}).find(p=>p.uuid?.toLowerCase()===uuid&&p.username===user),p=player?.entity?.position;
+  const observed=!!p&&[p.x,p.y,p.z].every(Number.isFinite);
+  emit({type:'chat',user,msg,sender_uuid:uuid,source,operator_authorized:source==='player_chat',sender_position:observed?{x:p.x,y:p.y,z:p.z}:null,sender_dimension:observed?(bot.game?.dimension||null):null,sender_observed_at:observed?at/1000:null});
  }
  function raw(data){const player=playerIdentities(bot).find(p=>p.uuid===String(data.sender).toLowerCase());if(player)deliver(player.name,data.plainMessage,'player_chat',player.uuid);}
  function formatted(text,position,original,sender){

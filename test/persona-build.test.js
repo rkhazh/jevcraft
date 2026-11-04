@@ -65,3 +65,17 @@ test('actual stairs validator exposes sanitized actionable detail without accept
  const {bot}=fixture();const source=schematic();source.palette=['oak_stairs'];source.regions=[{from:[0,0,0],to:[0,0,0],block:'oak_stairs',properties:{facing:'north'}}];
  assert.throws(()=>prepareBuild(bot,{mode:'fresh',build_id:null,schematic:source},'persona:p',{enabled:true}),err=>typeof err.validationDetail==='string'&&err.validationDetail.includes('half top or bottom')&&err.validationDetail.length<=240);
 });
+test('requested site anchors fresh work and rejects unrelated old structures before returning to them',()=>{
+ const {bot,entries}=fixture();const site_binding={position:{x:20,y:65,z:20},dimension:'overworld',radius:32};
+ const fresh=prepareBuild(bot,{mode:'fresh',build_id:null,schematic:schematic(),site_binding},'persona:p',{enabled:true});assert.deepEqual(fresh.buildAnchor,site_binding.position);assert.deepEqual(fresh.personaBuildReturn.target,site_binding.position);
+ entries.push({id:'old',from:'persona:p',dimension:'overworld',origin:{x:300,y:65,z:0},blueprint:{origin:{x:300,y:65,z:0},blocks:[]},design:{source:schematic()}});
+ for(const mode of ['finish','repair','edit'])assert.throws(()=>prepareBuild(bot,{mode,build_id:'old',schematic:null,site_binding},'persona:p',{enabled:true}),e=>e.code==='build_site_mismatch');
+ fresh.blueprint={origin:{x:300,y:65,z:0},blocks:[]};assert.throws(()=>assertBuildPolicy(fresh),e=>e.code==='build_site_mismatch');
+ assert.throws(()=>prepareBuild(bot,{mode:'fresh',build_id:null,schematic:schematic(),site_binding:{...site_binding,radius:1000}},'persona:p',{enabled:true}),e=>e.code==='invalid_build_site');
+});
+test('requested surface floor cannot bind a cave directly below, while roof height is independent',()=>{
+ const {bot}=fixture();const site_binding={position:{x:0,y:65,z:0},dimension:'overworld',radius:32};
+ const goal=prepareBuild(bot,{mode:'fresh',build_id:null,schematic:schematic(),site_binding},'persona:p',{enabled:true});
+ goal.blueprint={origin:{x:0,y:50,z:0},blocks:[]};assert.throws(()=>assertBuildPolicy(goal),e=>e.code==='build_site_mismatch');
+ goal.blueprint={origin:{x:0,y:64,z:0},blocks:[{x:0,y:78,z:0,material:'oak_planks'}]};assert.doesNotThrow(()=>assertBuildPolicy(goal));
+});

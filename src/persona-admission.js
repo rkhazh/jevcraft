@@ -33,7 +33,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   if(['obtain','craft'].includes(s?.kind)) {if(!exact(s,['kind','item','count','deliver'])||!items.includes(s.item)||!state.items.includes(s.item)||!Number.isInteger(s.count)||s.count<1||s.count>64||s.deliver!==false)return 'unsupported_spec';}
   else if(['follow','come'].includes(s?.kind)){if(!exact(s,['kind','target'])||!players.includes(s.target)||(!state.players.includes(s.target)&&!(s.kind==='come'&&rendezvous?.target===s.target&&['overworld','minecraft:overworld'].includes(state.dimension))))return 'unsupported_spec';}
   else if(s?.kind==='build') {
-   if(!exact(s,['kind','request','mode','build_id','schematic'])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
+   if(!exact(s,['kind','request','mode','build_id','schematic',...(Object.hasOwn(s,'site_binding')?['site_binding']:[])])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
    try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(err){if(!err.code&&typeof err.validationDetail==='string')return {reason:'invalid_build_geometry',detail:err.validationDetail.replace(/[\p{Cc}\p{Cf}]/gu,' ').slice(0,240)};return err.code||'invalid_build_geometry';}
   }
   else return 'unsupported_spec';

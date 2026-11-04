@@ -16,14 +16,28 @@ function validate(source,registry) {
  if(design.blocks.length>LIMITS.max_blocks)fail('too many blocks');
  return {...design,backend:'persona-validated',createdAt:new Date().toISOString()};
 }
+function siteBinding(value) {
+ if(value==null)return null;
+ const p=value.position;
+ if(Object.keys(value).sort().join()!=='dimension,position,radius'||value.dimension!=='overworld'||!p||Object.keys(p).sort().join()!=='x,y,z'||![p.x,p.y,p.z].every(Number.isFinite)||Math.abs(p.x)>29999984||Math.abs(p.z)>29999984||p.y< -64||p.y>319||!Number.isFinite(value.radius)||value.radius<1||value.radius>32)throw Object.assign(new Error('Invalid requested build site'),{code:'invalid_build_site'});
+ return structuredClone(value);
+}
+function assertSite(binding,origin,dim) {
+ if(binding&&(dimension(dim)!==binding.dimension||!origin||(Math.abs(origin.y-binding.position.y)>4||Math.hypot(origin.x-binding.position.x,origin.z-binding.position.z)>binding.radius)))throw Object.assign(new Error('Structure is outside the requested build site'),{code:'build_site_mismatch'});
+}
 function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  if(!enabled)fail('building disabled');
- const anchor={...bot.entity.position};
- const base={personaBuildPolicy:{anchor},suspendedTasks:[]};
+ const here={...bot.entity.position}, binding=siteBinding(spec.site_binding);
+ if(binding&&dimension(bot.game?.dimension)!==binding.dimension)throw Object.assign(new Error('Requested build site is in another dimension'),{code:'build_site_mismatch'});
+ const anchor=binding?{...binding.position}:here;
+ if(Math.hypot(anchor.x-here.x,anchor.y-here.y,anchor.z-here.z)>1024)fail('structure out of reach');
+ const base={personaBuildPolicy:{anchor,site_binding:binding},suspendedTasks:[]};
+ if(binding&&spec.mode==='fresh'){base.buildAnchor={...anchor};if(Math.hypot(anchor.x-here.x,anchor.y-here.y,anchor.z-here.z)>8)base.personaBuildReturn={target:{...anchor},entryId:null};}
  const entry=spec.build_id?bot.buildRegistry?.find(spec.build_id):null;
  if(spec.mode!=='fresh') {
   if(!entry||entry.from!==principal||dimension(entry.dimension)!==dimension(bot.game?.dimension))fail('unknown or unowned structure');
-  const distance=Math.hypot(entry.origin.x-anchor.x,entry.origin.y-anchor.y,entry.origin.z-anchor.z);
+  assertSite(binding,entry.origin,entry.dimension);
+  const distance=Math.hypot(entry.origin.x-here.x,entry.origin.y-here.y,entry.origin.z-here.z);
   if(distance>1024)fail('structure out of reach');
   base.personaBuildPolicy.anchor={...entry.origin};
   if(distance>8)base.personaBuildReturn={target:{...(entry.entrance||entry.origin)},entryId:entry.id};
@@ -77,6 +91,7 @@ function assertBuildPolicy(goal) {
  const source=goal.design?.source;
  if(source&&(source.size.some((n,i)=>n>LIMITS.max_size[i])||source.regions.length>LIMITS.max_regions))fail('design exceeds policy');
  const bp=goal.blueprint;if(!bp)return;
+ assertSite(goal.personaBuildPolicy.site_binding,bp.origin,goal.personaBuildPolicy.site_binding?.dimension);
  if(!Array.isArray(bp.blocks)||bp.blocks.length>LIMITS.max_blocks)fail('placed geometry exceeds policy');
  const clear=bp.terrain?.clear||[],fill=bp.terrain?.fill||[];
  if(clear.length+fill.length>2048)fail('earthworks exceed policy');

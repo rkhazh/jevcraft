@@ -22,3 +22,9 @@ test('full inventory retains sand and clay during persona hold without optional 
  const bot={game:{gameMode:'survival'},entity:{onGround:true},inventory:{slots,items:()=>slots,emptySlotCount:()=>0},tossStack:async()=>{throws++;throw new Error('must not discard')},chat:()=>assert.fail('tidy narration')};
  await keepRoom(bot,{check:()=>{}},{kind:'survive',personaHold:true});assert.equal(throws,0);assert.deepEqual(slots,before);
 });
+test('intentional hold is a permitted wait but genuine fresh survival action is not hidden; recovery offers no chores',async()=>{
+ const work=require('../src/work'),still=require('../src/stillness');const goal={kind:'survive',personaHold:true,step:{action:'persona_hold'}};
+ assert.equal(still.permittedWait({},goal),'waiting for an admitted persona goal');assert.equal(still.actionOf(goal).layer,'work');
+ goal.survivalAction={action:'tunnel_from_warden',at:new Date().toISOString()};assert.equal(still.actionOf(goal).layer,'survival');assert.notEqual(still.permittedWait({},goal),'waiting for an admitted persona goal');
+ assert.deepEqual(work.idleOptions({},goal),{});assert.deepEqual(await work.detourWork({},null,goal,()=>{}),[]);
+});

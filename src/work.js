@@ -8252,6 +8252,7 @@ const RAW_FOOD = { beef: 'cooked_beef', porkchop: 'cooked_porkchop', chicken: 'c
 const STONE_TOOLS = ['stone_pickaxe', 'stone_axe', 'stone_sword'];
 const toolTier = name => Math.max(0, TOOL_TIERS.indexOf(String(name).replace(/_(pickaxe|axe|sword|shovel)$/, '')) + 1);
 function idleOptions(bot, goal) {
+  if (goal?.personaHold === true) return {};
   const options = {}, stock = planningInventory(bot);
   const raw = Object.entries(RAW_FOOD).filter(([item]) => stock[item] > 0);
   if (raw.length) {
@@ -8706,6 +8707,7 @@ function noneGoodTopped(bot, now = Date.now()) {
 }
 
 async function detourWork(bot, task, goal, save, { survival = null, bounded = task, scratch = null, holding = false, preview = false, resting = () => false } = {}) {
+  if (goal?.personaHold === true) return [];
   scratch ||= { kind: 'survive', request: 'Something useful meanwhile', survival: goal.survival, portals: goal.portals, villages: goal.villages, blueprint: goal.blueprint };
   // The goal the detour serves, for what its questions read of the ladder
   // (note 749e); not saved or recorded with the scratch goal.
@@ -10319,7 +10321,10 @@ async function runIdle(bot, task, goal, store, { survival, decisionClient, recov
     await spin(goal);
     task.interruptCheck = undefined;
     // A stall is answered first, before anything can throw it again.
-    const stall = takeStall(bot);
+    const takenStall = takeStall(bot);
+    // Intentional persona waiting is not failed work and cannot authorize a
+    // useful detour. Genuine survival stalls retain the normal recovery path.
+    const stall = goal.personaHold && takenStall?.layer === 'work' ? null : takenStall;
     if (stall && !escalatedToStep(stall)) { await inCatch(task, goal, () => answerStall(bot, task, goal, save, stall, { client: decisionClient, survival, onStep, idle: true })); failures = 0; save(); onStep(goal); continue; }
     // A preemption is the arbiter's to pick up, below.
     const held = loopCheck(task);
@@ -10345,7 +10350,7 @@ async function runIdle(bot, task, goal, store, { survival, decisionClient, recov
           survive: async () => (!turn || turn.unclaimed) && await survival.step(task, goal, save, onStep),
           loot: () => lootNearby(bot, task, goal, save, lootActions()),
           work: () => idleWork(bot, task, goal, save, decisionClient, onStep),
-          stopMotion: () => { bot.pathfinder.setGoal(null); bot.clearControlStates(); goal.step = { action: 'persona_hold' }; },
+          stopMotion: () => { bot.pathfinder.setGoal(null); bot.clearControlStates(); goal.step = { action: 'persona_hold' }; require('./turn').takeTurn(bot,'work','persona_hold'); },
         });
       }
       failures = 0; delete goal.lastError; delete goal.lastErrorAt; save(); onStep(goal); narrate(bot, goal);

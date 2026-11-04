@@ -104,6 +104,7 @@ function waitEnds(bot, goal, now = Date.now()) {
 }
 function permittedWait(bot, goal, now = Date.now()) {
   if (bot.isSleeping) return 'asleep';
+  if (goal?.kind === 'survive' && goal.personaHold === true && goal.step?.action === 'persona_hold' && actionOf(goal, now).layer === 'work') return 'waiting for an admitted persona goal';
   if (COMPANY.has(goal?.kind)) return 'with the player';
   // Something hostile in view is the survival layer's moment. For a
   // minute, and not the hunt's own quarry: a blaze watched through the
@@ -356,6 +357,7 @@ function watchStalls(bot, goalOf) {
     if (late > 3000) console.log(`[blocked] ${Math.round(late / 1000)}s on ${stalls.goalOf ? actionOf(stalls.goalOf() || {}, now).key : 'nothing'}`);
     airWatch(bot, now);
     const goal = stalls.goalOf?.();
+    if (goal?.kind === 'survive' && goal.personaHold === true && goal.step?.action === 'persona_hold' && actionOf(goal, now).layer === 'work') return;
     if (!goal || stalls.stall || bot.game?.gameMode === 'creative' || /end/.test(String(bot.game?.dimension || ''))) return;
     // Held for Jev (jev-down.js): the stillness is the hold, not a stall;
     // nothing is counted against the action while it lasts (note 707).

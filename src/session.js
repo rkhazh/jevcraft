@@ -414,7 +414,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     const retained = externalPersona ? null : store.read();
     const standing = externalPersona ? null : dreamStore.read();
     if (standing?.dream && !launchingDream && shouldLaunchDream(standing, retained, { ready: readyForDream(), resting: isSetAside(survival, 'dream_launch', standing.dream) })) { launchDream(standing); return; }
-    const goal = { ...(externalPersona ? {} : idleStore.read() || {}), version: 1, kind: 'survive', personaHold: externalPersona,
+    const goal = { ...(externalPersona ? {} : idleStore.read() || {}), version: 1, kind: 'survive', personaHold: externalPersona, ...(externalPersona?{step:{action:'persona_hold'}}:{}),
       request: externalPersona ? 'Stay nearby between admitted persona goals; react to survival needs without optional resource gathering or exploration' : 'Stay alive and prepare supplies between player requests',
       retainedRequest: retained?.request, blueprint: retained?.blueprint, survival: survival.state,
       // A dream set aside is not chased by the idle loop either.
@@ -843,6 +843,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     persona = require('./persona-admission').createPersona({
       rendezvous, items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
+        execution:require('./persona-execution').executionSnapshot(bot,active),
         build_capabilities:buildApi.capabilities(bot,buildEnabled),builds:buildApi.describeBuilds(bot),
         build_progress:active?.goal?.kind==='build'?{build_id:active.goal.buildId||null,phase:active.goal.buildPhase||active.goal.step?.action||'pending',placements_recorded:Object.keys(active.goal.buildOwned||{}).length,planned_blocks:active.goal.blueprint?.blocks?.length||null}:null,connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
         dimension:bot.game?.dimension || 'unknown',version:bot.version || null,bot_uuid:bot.player?.uuid || null,

@@ -19,3 +19,9 @@ test('only private persona speech remains public and still obeys slash guard',()
  require('../src/commands').createCommandAccess(b,{users:[]});const speak=exclusivePersonaSpeech(b);
  b.chat('English tactical status');assert.deepEqual(b.sent,[]);speak('Привет, земляк!');assert.deepEqual(b.sent,['Привет, земляк!']);assert.throws(()=>speak('/op somebody'),/fresh explicit/);
 });
+test('chat binds sender position at receipt, not later bot or sender drift',()=>{
+ const {b,events}=fixture();b.game={dimension:'overworld'};b.players.SkipperBot.entity={position:{x:12,y:64,z:34}};
+ b.emit('messagestr','<SkipperBot> строй здесь','system',{},null);b.players.SkipperBot.entity.position.x=900;
+ assert.deepEqual(events[0].sender_position,{x:12,y:64,z:34});assert.equal(events[0].sender_dimension,'overworld');assert.ok(Number.isFinite(events[0].sender_observed_at));
+ delete b.players.SkipperBot.entity;b.emit('messagestr','<SkipperBot> другое','system',{},null);assert.equal(events[1].sender_position,null);assert.equal(events[1].sender_dimension,null);
+});
