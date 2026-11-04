@@ -11,7 +11,7 @@ function communityAuth(bot, config, {password, successText, allowRegister=false,
  let diagnostics=0;
  function report(event,text){
   if(diagnostics>=12)return;diagnostics++;
-  const clean=typeof text==='string'?text.split(password).join('[redacted]').replace(/\/(?:login|reg(?:ister)?)\b[^\r\n]*/gi,'[authentication command redacted]').replace(/[\x00-\x1f\x7f]/g,' ').slice(0,240):undefined;
+  const clean=typeof text==='string'?text.split(password).join('[redacted]').replace(/\/(?:login|l|reg(?:ister)?)\b[^\r\n]*/gi,'[authentication command redacted]').replace(/[\x00-\x1f\x7f]/g,' ').slice(0,240):undefined;
   try{diagnostic({event,...(clean!==undefined?{text:clean}:{})});}catch{}
  }
  let authenticated=false,admitted=false,sent=false,registered=false,resolve,reject;
@@ -30,7 +30,8 @@ function communityAuth(bot, config, {password, successText, allowRegister=false,
    if(!registered){registered=true;report('registration_sent');sendAuth(`/reg ${password} ${password}`);}
    return;
   }
-  if(!sent&&/\/login\b/.test(text)){sent=true;report('login_sent');sendAuth(`/login ${password}`);}
+  const loginPrompt=String(text).match(/\/(login|l)(?=\s|$)/i);
+  if(!sent&&loginPrompt){sent=true;report('login_sent');const command=loginPrompt[1].toLowerCase()==='l'?'/l':'/login';sendAuth(`${command} ${password}`);}
  }
  bot.on('messagestr',message);
  bot.once('end',()=>{authSend=null;clearTimeout(timer);bot.removeListener('messagestr',message);if(!admitted)reject(new Error('Connection ended before authentication'))});

@@ -31,3 +31,20 @@ test('authentication diagnostics are trusted, bounded and redact secrets/command
  assert.ok(!JSON.stringify(events).includes('secret'));assert.ok(!JSON.stringify(events).includes('/reg'));assert.ok(events.some(e=>e.event==='registration_sent'));
  for(let i=0;i<30;i++)b.emit('messagestr','x'.repeat(1000),'system',{},null);assert.equal(events.length,12);assert.ok(events.every(e=>!e.text||e.text.length<=240));b.emit('end');await assert.rejects(g.ready);
 });
+test('trusted short login alias sends fixed command once and redacts its arguments',async()=>{
+ const b=bot(),events=[],g=communityAuth(b,config,{password:'secret',diagnostic:e=>events.push(e)});
+ const prompt='Авторизация >> Логинься: /l и пароль';
+ b.emit('messagestr',prompt,'chat',{},'player');
+ b.emit('messagestr',prompt,'system',{},'player');
+ b.emit('messagestr','/list players','system',{},null);
+ assert.deepEqual(b.sent,[]);
+ b.emit('messagestr',prompt,'system',{},null);
+ b.emit('messagestr','/login password','system',{},null);
+ b.emit('messagestr','/l unrelated-sensitive-argument','system',{},null);
+ assert.deepEqual(b.sent,['/l secret']);
+ assert.ok(!JSON.stringify(events).includes('secret'));
+ assert.ok(!JSON.stringify(events).includes('unrelated-sensitive-argument'));
+ assert.ok(events.some(e=>e.text==='Авторизация >> Логинься: [authentication command redacted]'));
+ assert.equal(g.authenticated,false);
+ b.emit('messagestr','SkipperJev joined the game','system',{},null);await g.ready;b.emit('end');
+});
