@@ -186,6 +186,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // world rather than the request and is shared by every later build.
   const builds = new BuildRegistry(path.join(stateDirectory, `${memoryIdentity}-builds.json`));
   bot.buildRegistry = builds;
+  if(externalPersona)bot.loadPlugin(()=>require('./structure-mutations').installStructureMutationGuard(bot,{validGoal:goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId),record:event=>console.log(JSON.stringify({structureMutation:event}))}));
   // The goal store checkpoints placements during a lease. Recover that proof
   // after an interrupted process without resuming the expired goal itself.
   if (externalPersona && memorySeed?.personaGoalId && memorySeed.buildId && memorySeed.buildOwned && builds.find(memorySeed.buildId)) {

@@ -5256,7 +5256,7 @@ async function executeConstructionWork(bot, task, goal, save, work) {
     const changed = packet => { if (packet.location?.x === p.x && packet.location.y === p.y && packet.location.z === p.z) confirmed = packet.type === 0; };
     bot._client.on('block_change', changed);
     try {
-      await dig(bot, task, p, { requireDrops: false });
+      await require('./structure-mutations').withBuildMutation(bot,task,goal,p,'dig',()=>dig(bot, task, p, { requireDrops: false }));
       await waitFor(task, () => confirmed && footprint.every(part => air(bot.blockAt(pos(part)))), 5000);
     } finally { bot._client.removeListener('block_change', changed); }
     for (const part of footprint) delete goal.buildOwned?.[`${part.x},${part.y},${part.z}`];
@@ -5265,7 +5265,7 @@ async function executeConstructionWork(bot, task, goal, save, work) {
     let placed = false;
     const observe = (_old, block) => { if (block.position.equals(p)) placed = true; };
     bot.on('blockPlaced', observe);
-    try { await place(bot, task, p, work.material, { face, properties: work.properties }); }
+    try { await require('./structure-mutations').withBuildMutation(bot,task,goal,p,'place',()=>place(bot, task, p, work.material, { face, properties: work.properties }),{cells:footprint}); }
     finally {
       bot.removeListener('blockPlaced', observe);
       // A door or bed companion is created by the server, not a second placement.

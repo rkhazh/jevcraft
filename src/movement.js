@@ -178,6 +178,7 @@ class SurvivalMovements extends Movements {
   // house or a portal keeps its exclusion (exclusionBreak), and what is not
   // a building block (a chest, a bed, obsidian) is not dug this way.
   safeToBreak(block) {
+    if (this.bot._registeredStructureProtection?.(block?.position)) return false;
     if (super.safeToBreak(block)) return true;
     if (!this.canDig || !block?.type || !block.position || !this.blocksCantBreak.has(block.type)) return false;
     ownLaid ||= { materials: require('./shelter').buildingMaterials, laidAt: require('./own-blocks').laidAt };
@@ -202,7 +203,7 @@ class SurvivalMovements extends Movements {
       if (!this._nodeWindow.said) { this._nodeWindow.said = true; console.log(`[pathfinder] the search was cut at ${NODE_CAP} nodes in ${NODE_WINDOW_MS / 1000} seconds (note 2620): no route is found past it`); }
       return [];
     }
-    const neighbors = super.getNeighbors(node);
+    const neighbors = super.getNeighbors(node).filter(move => !require('./structure-mutations').routeMutatesStructure(this.bot, move));
     if (!this._hostileObservation || Date.now() - this._hostileObservation.at > 250) {
       this._hostileObservation = { at: Date.now(), entities: hostileEntities(this.bot, 64), sight: new Map() };
     }
