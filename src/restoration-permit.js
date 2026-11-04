@@ -1,5 +1,5 @@
 'use strict';
-const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),{Vec3}=require('vec3');
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sorted=value=>Array.isArray(value)?value.map(sorted):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,sorted(value[k])])):value;
 const point=p=>({x:p.x,y:p.y,z:p.z});
@@ -33,6 +33,17 @@ function readRestorationAuthorization(filename,{worldId,sessionId,validGoal,cons
   }catch{return null;}
  };
  return {
+  describe(bot,buildId){
+   if(buildId!==data.build_id)return null;
+   // Observation is conditional operator authority, not a lease or a mutation
+   // permission. In particular it must remain visible before a goal exists.
+   let status='available';
+   if(now()<data.issued_at-1||now()>=data.expires_at)status='expired';
+   else if(String(bot.game?.dimension||'').replace(/^minecraft:/,'')!==data.dimension)status='different_dimension';
+   else{try{if(blueprintFingerprint(bot.buildRegistry?.find(data.build_id)?.blueprint)!==data.blueprint_sha256)status='changed_plan';}catch{status='changed_plan';}}
+   return {scope:'conditional_operator_restoration',meaning:'These are narrow exceptions for unexpected blocks, not the complete set of modifiable cells. Ordinary ownership-based building and editing permissions remain unchanged; all dispatch checks still apply.',status,build_id:data.build_id,dimension:data.dimension,operation:'dig',modes:['finish','repair'],expires_at:data.expires_at,
+    cells:data.cells.map(c=>{const observed=bot.blockAt(new Vec3(c.position.x,c.position.y,c.position.z));return {position:point(c.position),expected:{...c.expected},desired:structuredClone(c.desired),consumed:fs.existsSync(marker(c)),expected_state_matches:observed?observed.name===c.expected.material&&observed.stateId===c.expected.state_id:null};})};
+  },
   allows:(bot,goal,p,token)=>!!matches(bot,goal,p,token),
   claim(bot,goal,p,token){
    const c=matches(bot,goal,p,token);if(!c)throw new Error('Restoration permission no longer matches');if(token)return token;

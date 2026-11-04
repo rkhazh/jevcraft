@@ -152,6 +152,7 @@ function describeBuilds(bot) {
   if(checked)readBudget-=cost;
   return {id:entry.id,name:entry.name,status:entry.status==='complete'&&!entry.personaVerifiedAt?'complete_unverified':entry.status,status_scope:'historical',
    design_adaptation:designAdaptation(entry.blueprint),
+   restoration_authorization:bot._restorationPermit?.describe(bot,entry.id)||null,
    verified:verification?.verified===true,verification,verification_scope:checked?'current_loaded_world':'not_checked_budget',
    last_verified_at:entry.personaVerifiedAt||null,last_verification:entry.personaVerification||null,
    origin:entry.origin,site_center:siteCenter(entry.origin,entry.design?.source?.size),bounds:entry.bounds,

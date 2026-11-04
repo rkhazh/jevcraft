@@ -67,3 +67,8 @@ test('restoration finish packet is single-use within the in-flight dig',async t=
  const f=fixture(t),packets=[];f.bot._client.write=(name,p)=>packets.push(p.status);f.bot.dig=async()=>{for(const status of [0,2,2])f.bot._client.write('block_dig',{status,location:f.p});};f.bot._restorationPermit=f.load();installStructureMutationGuard(f.bot,{validGoal:f.options.validGoal});
  await assert.rejects(withBuildMutation(f.bot,{check(){}},f.goal,f.p,'dig',()=>f.bot.dig(f.bot.blockAt(f.p))));assert.deepEqual(packets,[0,2]);
 });
+
+test('conditional restoration scope is visible before any active goal without exposing artifact or token',t=>{
+ const f=fixture(t),permit=f.load();f.valid(false);const d=permit.describe(f.bot,f.entry.id);assert.equal(d.status,'available');assert.equal(d.scope,'conditional_operator_restoration');assert.deepEqual(d.modes,['finish','repair']);assert.equal(d.operation,'dig');assert.equal(d.cells[0].consumed,false);assert.equal(d.cells[0].expected_state_matches,true);assert.equal(permit.allows(f.bot,f.goal,f.p),false);assert.equal(JSON.stringify(d).includes(f.file),false);assert.equal(d.authorization_id,undefined);assert.equal(permit.describe(f.bot,'other'),null);
+ f.valid(true);permit.claim(f.bot,f.goal,f.p);assert.equal(permit.describe(f.bot,f.entry.id).cells[0].consumed,true);f.time(1200);assert.equal(permit.describe(f.bot,f.entry.id).status,'expired');
+});
