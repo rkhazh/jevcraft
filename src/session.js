@@ -730,7 +730,8 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       if (bot.vehicle || bot._seatedIn != null) seated();
       // The seat can come by the raw packet alone (compatibility.js), with no mount event.
       bot._client.on('set_passengers', () => { if (bot._seatedIn != null && !bot.vehicle) seated(); });
-      await bot.waitForChunksToLoad();
+      if (authentication) await require('./community-chunks').waitForCommunityChunks(bot,{ended:()=>ended,report:event=>console.log(JSON.stringify({communityChunks:event}))});
+      else await bot.waitForChunksToLoad();
       if (ended || !bot.isAlive) return;
       // The ground about the bot read again before anything resumes: in
       // lava, out at once; in water beside lava, onto dry ground clear of it
