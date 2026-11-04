@@ -10248,6 +10248,16 @@ class Survival {
     });
   }
 
+  async stepShaftReturn(task, goal, save) {
+    const retreat = require('./shaft-retreat');
+    const wait = () => retreat.waitStep(this.bot, task, this.state, goal, save, { report: action => this.report(goal, save, action) });
+    if (await wait()) return true;
+    const before = this.bot.entity.position.clone();
+    const returned = await this.returnFromShaft(task, goal, save);
+    if (returned || this.bot.entity.position.distanceTo(before) >= .1) return true;
+    return wait();
+  }
+
   // One Jev decision over a tree the code built: the question is defined in
   // decisions/survival.js and asked the one way every question is.
   decide(task, goal, save, { id, state, tree, context, isFresh = () => true, interrupt = () => {}, situation = undefined, aside = false }) {
@@ -11618,7 +11628,7 @@ class Survival {
     const atArm = threats(bot).filter(t => t.distance <= 3 && !shooter(t.entity) && (t.visible || canStrike(bot, t.entity)) && !nightHunted(bot, t.entity));
     if (atArm.length && !claimed(bot, atArm[0].entity)) { await this.flee(task, goal, save); onStep(goal); return true; }
     if (require('./shaft-retreat').current(bot, this.state)?.phase === 'returning' && !require('./shaft-retreat').urgent(bot)) {
-      await this.returnFromShaft(task, goal, save); onStep(goal); return true;
+      const acted = await this.stepShaftReturn(task, goal, save); onStep(goal); return acted;
     }
     const refuge = this.currentShelter();
     // Or shut to walkers with only lava or water left open in its shell,
@@ -13713,7 +13723,7 @@ function claim(bot, goal = {}, survival = null) {
   if (atArm.length) return make('escape_threat', 'pressing', { atArm: atArm.slice(0, 3).map(t => ({ ...mob(t), ...(t.entity.heldItem?.name ? { held: t.entity.heldItem.name } : {}), canReach: 'at its reach of the bot now' })), ...edgeFact, ...pocket });
   const shaftReturn = require('./shaft-retreat').current(bot, state);
   if (['returning', 'descending'].includes(shaftReturn?.phase) && !require('./shaft-retreat').urgent(bot))
-    return make('return_from_shaft', 'pressing', { returnTo: shaftReturn.entry, remainingHeight: Math.max(0, shaftReturn.entry.y - bot.entity.position.y), ...(shaftReturn.failure ? { blocked: shaftReturn.failure } : {}) });
+    return make(shaftReturn.failure ? 'wait_for_shaft_return' : 'return_from_shaft', 'pressing', { pending: true, returnTo: shaftReturn.entry, remainingHeight: Math.max(0, shaftReturn.entry.y - bot.entity.position.y), ...(shaftReturn.failure ? { blocked: shaftReturn.failure, retryAfter: shaftReturn.retryAfter } : {}) });
   // The work's turns stopped at once by its own threat check, again and again, with nothing claimed for the mob that
   // stops them (note 2313): the mob is survival's, and Jev is asked how to answer it. full-11 (25588, 2026-10-27
   // 19:15Z), climbing out at y -3, was given the work alone six times in a second, each stopped at 'Threat nearby:

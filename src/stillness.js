@@ -54,7 +54,7 @@ const HOLDS = new Set(['hold_bunker', 'hold_defensive_position', 'fight', 'defen
   'seal_shelter', 'wall_off', 'take_cover', 'dig_in_to_recover', 'break_their_line', 'take_the_door',
   // A shelter held because something outside is watching, and the minute
   // by the bed before it can be slept in.
-  'wait_in_shelter', 'wait_for_bedtime', 'sleep', 'rest_to_heal',
+  'wait_in_shelter', 'wait_for_bedtime', 'sleep', 'rest_to_heal', 'wait_for_shaft_return',
   // Crouched still on a span with a mob about: still is the point. Set
   // aside as a stall, every hold after threw, and nothing swung or
   // shielded while mid-242-o's piglin hit it off its span (note 420).
@@ -73,7 +73,8 @@ const EMERGENCIES = new Set(['leave_lava', 'leave_lava_edge', 'break_from_swarm'
 // excused by name for forty seconds that placed two, its cell taken by a
 // skeleton shooting it from 1.6 blocks, and the stance never came (note 520).
 const placing = (bot, now) => !!bot?._sealPlaced && now - bot._sealPlaced.at < 8000;
-const RESULTS = { fight_in_pocket: (bot, now) => !!bot?._struck && now - bot._struck.at < 8000, seal_shelter: placing, dig_in: placing };
+const RESULTS = { fight_in_pocket: (bot, now) => !!bot?._struck && now - bot._struck.at < 8000, seal_shelter: placing, dig_in: placing,
+  wait_for_shaft_return: (bot, now) => bot?._shaftReturnWaitingUntil > now };
 // Whether a hold or an emergency is excused now: by its name, and where its
 // result can be read, by the result.
 const excused = (bot, name, now = Date.now()) => (HOLDS.has(name) || EMERGENCIES.has(name)) && (RESULTS[name]?.(bot, now) ?? true);

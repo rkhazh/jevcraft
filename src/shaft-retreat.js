@@ -4,7 +4,8 @@ const shelter=require('./shelter');
 const point=p=>p&&[p.x,p.y,p.z].every(Number.isInteger);
 const vec=p=>new Vec3(p.x,p.y,p.z);
 const air=b=>b&&['air','cave_air','void_air'].includes(b.name);
-const cube=b=>b&&shelter.buildingMaterials.has(b.name)&&b.shapes?.some(s=>s.join(',')==='0,0,0,1,1,1');
+const fullCube=b=>!!b?.shapes?.some(s=>s.join(',')==='0,0,0,1,1,1');
+const cube=b=>b&&shelter.buildingMaterials.has(b.name)&&fullCube(b);
 const same=(a,b)=>a.x===b.x&&a.y===b.y&&a.z===b.z;
 
 function current(bot,state){
@@ -26,10 +27,16 @@ function noteCap(bot,state,p,goal){
  r.caps=(r.caps||[]).filter(c=>!same(c.position,p));
  r.caps.push({position:{...p},name:b.name,stateId:b.stateId});r.phase='sheltered';return true;
 }
-function capMatches(bot,r,p){
+function observedCap(bot,r,p){
  const b=bot.blockAt(p),receipt=(r.caps||[]).find(c=>point(c.position)&&same(c.position,p));
- return !!receipt&&cube(b)&&b.name===receipt.name&&Number.isInteger(receipt.stateId)&&b.stateId===receipt.stateId;
+ if(!receipt||!Number.isInteger(receipt.stateId)||!Number.isInteger(b?.stateId)||!fullCube(b))return null;
+ const exact=cube(b)&&b.name===receipt.name&&b.stateId===receipt.stateId;
+ // Compatibility is an inference from the historical placement, not a
+ // witnessed update or a new ownership receipt. No other soil substitutions.
+ const grown=receipt.name==='dirt'&&b.name==='grass_block';
+ return exact||grown?{original:{name:receipt.name,stateId:receipt.stateId},observed:{name:b.name,stateId:b.stateId},inferred:!exact}:null;
 }
+const capMatches=(bot,r,p)=>!!observedCap(bot,r,p);
 function arrived(bot,r){
  const p=bot.entity.position,e=r.entry;
  return Math.abs(p.x-e.x-.5)<.45&&Math.abs(p.z-e.z-.5)<.45&&Math.abs(p.y-e.y)<.15&&bot.entity.onGround!==false&&
@@ -78,7 +85,8 @@ async function returnStep(bot,task,state,goal,save,{dig,pillar=require('./pillar
  }
  if(r.retryAfter>Date.now())return false;
  const plan=preflight(bot,state);
- if(!plan.ok){r.failure=plan.reason;r.retryAfter=Date.now()+5000;save();return false;}
+ if(!plan.ok){r.failure=plan.reason;r.retryAfter=Date.now()+5000;report({action:'shaft_return_blocked',pending:true,target:{...r.entry},position:{...bot.entity.position},reason:r.failure,retryAfter:r.retryAfter});save();return false;}
+ delete r.failure;delete r.retryAfter;
  const before=bot.entity.position.y,guard=Object.create(task);
  guard.check=()=>{
   task.check();
@@ -92,9 +100,10 @@ async function returnStep(bot,task,state,goal,save,{dig,pillar=require('./pillar
  require('./turn').takeTurn(bot,'survival','return_from_shaft');
  try{
   await pillar(bot,guard,Math.min(r.entry.y,Math.floor(before)+4),{dig:async(b,t,p,options)=>{
-   if(!capMatches(bot,r,p))throw new Error('Recorded shaft cap changed before removal');
-   const receipt=r.caps.find(c=>same(c.position,p));
-   return require('./structure-mutations').withMutationExpectation(bot,{operation:'dig',position:p,name:receipt.name,stateId:receipt.stateId,check:()=>{
+   const cap=observedCap(bot,r,p);
+   if(!cap)throw new Error('Recorded shaft cap changed before removal');
+   if(cap.inferred)report({action:'shaft_cap_evolution',position:{...p},...cap});
+   return require('./structure-mutations').withMutationExpectation(bot,{operation:'dig',position:p,...cap.observed,check:()=>{
     guard.check();
     const fresh=preflight(bot,state);
     if(!fresh.ok)throw Object.assign(new Error(fresh.reason),{name:'Blocked'});
@@ -104,6 +113,22 @@ async function returnStep(bot,task,state,goal,save,{dig,pillar=require('./pillar
  if(arrived(bot,r))return returnStep(bot,task,state,goal,save,{dig,pillar,report,interrupt});
  if(bot.entity.position.y<before+.5){r.failure='Shaft ascent made no verified progress';r.retryAfter=Date.now()+5000;save();}
  return false;
+}
+async function waitStep(bot,task,state,goal,save,{report=()=>{},now=Date.now,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
+ const r=current(bot,state);if(r?.phase!=='returning'||!(r.retryAfter>now()))return false;
+ const until=Math.min(r.retryAfter,now()+5000);
+ bot._shaftReturnWaitingUntil=until;
+ goal.step={action:'wait_for_shaft_return',pending:true,target:{...r.entry},reason:r.failure,retryAfter:r.retryAfter};
+ try{
+  report({...goal.step,position:{...bot.entity.position}});
+  while(now()<until){
+   task.check();require('./vitals').checkAir(bot);
+   if(urgent(bot))throw Object.assign(new Error('Immediate danger interrupts the shaft return wait'),{name:'NeedsSafety'});
+   if(resume(bot,state)){save();if(r.phase==='displaced')return false;}
+   await sleep(Math.min(100,until-now()));
+  }
+  return true;
+ }finally{delete bot._shaftReturnWaitingUntil;}
 }
 function endQuietEncounter(bot,state,now=Date.now()){
  const r=current(bot,state);
@@ -122,4 +147,4 @@ function resume(bot,state){
  }
  return false;
 }
-module.exports={current,descentBlocked,begin,noteCap,capMatches,arrived,preflight,urgent,returnStep,endQuietEncounter,resume};
+module.exports={current,descentBlocked,begin,noteCap,observedCap,capMatches,arrived,preflight,urgent,returnStep,waitStep,endQuietEncounter,resume};

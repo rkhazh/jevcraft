@@ -9,7 +9,7 @@ const retreat=require('../src/shaft-retreat');
 function fixture(){
  const blocks=new Map(),dug=[];let rises=true;
  const put=(p,name)=>blocks.set(`${p.x},${p.y},${p.z}`,name);
- const at=p=>{p=p.floored();const name=blocks.get(`${p.x},${p.y},${p.z}`)??(p.y<64?'stone':'air');return {name,stateId:({air:0,dirt:10,granite:2,cobblestone:14})[name]??1,position:p,boundingBox:name==='air'?'empty':'block',shapes:name==='air'?[]:[[0,0,0,1,1,1]],diggable:true};};
+ const at=p=>{p=p.floored();const name=blocks.get(`${p.x},${p.y},${p.z}`)??(p.y<64?'stone':'air');return {name,stateId:({air:0,grass_block:9,dirt:10,granite:2,cobblestone:14})[name]??1,position:p,boundingBox:name==='air'?'empty':'block',shapes:name==='air'?[]:[[0,0,0,1,1,1]],diggable:true};};
  for(let y=40;y<64;y++)put(new Vec3(0,y,0),'air');
  const caps=[42,45,48,51,54,57,63].map(y=>{const p=new Vec3(0,y,0),name=y===54?'granite':y===57?'cobblestone':'dirt';put(p,name);return {position:{...p},name,stateId:at(p).stateId};});
  const bot={_client:{write(){}},entity:{position:new Vec3(.5,40,.5),onGround:true},game:{dimension:'overworld',gameMode:'survival',minY:0,height:96},health:20,food:20,oxygenLevel:20,entities:{},time:{timeOfDay:1000},blockAt:at,inventory:{items:()=>[{name:'dirt',count:64},{name:'stone_pickaxe',count:1}],slots:[]}};
@@ -221,5 +221,62 @@ test('a changed cap or newly waterlogged neighbor during aim prevents the actual
   };
   await assert.rejects(f.survival.leave(f.task,f.goal,()=>{},f.refuge));
   assert.equal(writes,0);assert.equal(f.bot.entity.position.y,40);assert.equal(f.state.shaftRetreat.phase,'returning');
+ }
+});
+
+test('213212 owned dirt becoming grass permits exact observed removal without rewriting the original receipt',async()=>{
+ const f=fixture(),p=new Vec3(0,63,0),original=JSON.parse(JSON.stringify(f.state.shaftRetreat.caps));
+ f.put(p,'grass_block');f.state.shaftRetreat.failure='old grass blocker';f.state.shaftRetreat.retryAfter=0;assert.equal(retreat.preflight(f.bot,f.state).ok,true);
+ const reports=[];f.survival.report=(goal,save,action)=>{if(action.action==='return_from_shaft'){assert.equal(f.state.shaftRetreat.failure,undefined);assert.equal(f.state.shaftRetreat.retryAfter,undefined);}reports.push(action);goal.survivalAction=action;save();};
+ for(let n=0;n<8&&f.bot.entity.position.y<64;n++)await f.survival.leave(f.task,f.goal,()=>{},f.refuge);
+ assert.equal(f.bot.entity.position.y,64);assert.ok(f.dug.some(c=>c.y===63));
+ assert.deepEqual(f.state.shaftRetreat.caps,original);
+ assert.ok(reports.some(r=>r.action==='shaft_cap_evolution'&&r.inferred===true&&r.original.name==='dirt'&&r.observed.name==='grass_block'));
+});
+
+test('natural-growth compatibility is limited to recorded dirt and grass, with an exact dispatch fence',async()=>{
+ for(const material of ['mycelium','podzol','coarse_dirt','rooted_dirt','dirt_path','farmland','stone']){
+  const f=fixture();f.put(new Vec3(0,63,0),material);assert.equal(retreat.preflight(f.bot,f.state).ok,false);
+ }
+ for(const phase of [0,2]){
+  const f=fixture(),p=new Vec3(0,42,0);f.put(p,'grass_block');let writes=0;f.bot._client.write=()=>writes++;
+  f.survival.actions.dig=async(bot,_task,cell)=>{
+   if(phase===2)bot._client.write('block_dig',{status:0,location:cell});
+   f.put(cell,'dirt');bot._client.write('block_dig',{status:phase,location:cell});
+  };
+  await assert.rejects(f.survival.leave(f.task,f.goal,()=>{},f.refuge));
+  assert.equal(writes,phase===2?1:0);assert.equal(f.bot.entity.position.y,40);
+ }
+ const f=fixture();f.put(new Vec3(0,57,0),'grass_block');assert.equal(retreat.preflight(f.bot,f.state).ok,false,'a cobblestone receipt cannot acquire grass compatibility');
+});
+
+test('blocked return retains priority and waits through its cooldown without a false movement or completion report',async t=>{
+ const f=fixture();f.state.shaftRetreat.phase='returning';f.put(new Vec3(0,45,0),'chest');
+ let now=Date.now(),waited=0,checks=0,saves=0;const reports=[];
+ t.mock.method(Date,'now',()=>now);
+ f.task.check=()=>checks++;f.survival.report=(goal,save,action)=>{reports.push(action);goal.survivalAction=action;save();};
+ const realWait=retreat.waitStep;
+ t.mock.method(retreat,'waitStep',(...args)=>realWait(...args.slice(0,5),{...args[5],now:()=>now,sleep:async ms=>{assert.equal(require('../src/stillness').excused(f.bot,'wait_for_shaft_return',now),true);waited+=ms;now+=ms;}}));
+ assert.equal(await f.survival.stepShaftReturn(f.task,f.goal,()=>saves++),true,'the reported action is an actual bounded wait');
+ assert.ok(waited>=4900);assert.ok(checks>=45);assert.equal(f.bot.entity.position.y,40);assert.deepEqual(f.dug,[]);
+ assert.equal(f.state.shaftRetreat.phase,'returning');assert.equal(f.state.shaftRetreat.excavationUsed,true);
+ assert.ok(reports.some(r=>r.action==='wait_for_shaft_return'&&r.pending===true&&r.reason.includes('chest')));
+ assert.ok(!reports.some(r=>r.action==='returned_from_shaft'));
+ assert.equal(require('../src/survival').claim(f.bot,f.goal,f.survival).action,'wait_for_shaft_return');
+ assert.equal(require('../src/stillness').excused(f.bot,'wait_for_shaft_return',now),false);
+ for(let i=0;i<3;i++){
+  assert.equal(await f.survival.stepShaftReturn(f.task,f.goal,()=>saves++),true);
+  assert.equal(require('../src/survival').claim(f.bot,f.goal,f.survival).action,'wait_for_shaft_return','unchanged obstruction keeps the same claim across retry expiry');
+ }
+ assert.ok(waited>=20000);assert.equal(f.bot.entity.position.y,40);assert.deepEqual(f.dug,[]);
+ assert.ok(saves>0);
+});
+
+test('cooldown waiting responds to cancellation and immediate danger',async()=>{
+ for(const interruption of ['Cancelled','NeedsSafety']){
+  const f=fixture();f.state.shaftRetreat.phase='returning';let now=Date.now();f.state.shaftRetreat.retryAfter=now+5000;
+  let sleeps=0;f.task.check=()=>{if(sleeps&&interruption==='Cancelled')throw Object.assign(new Error('cancelled'),{name:'Cancelled'});};
+  await assert.rejects(retreat.waitStep(f.bot,f.task,f.state,f.goal,()=>{},{now:()=>now,sleep:async ms=>{now+=ms;sleeps++;if(interruption==='NeedsSafety')f.bot._recentHurtAt=Date.now();}}),{name:interruption});
+  assert.equal(sleeps,1);assert.equal(f.state.shaftRetreat.phase,'returning');assert.deepEqual(f.dug,[]);
  }
 });
