@@ -133,9 +133,21 @@ function verifyBuild(bot,goal){return buildVerification(bot,goal).verified;}
 function capabilities(bot,enabled){return {...LIMITS,enabled,modes:enabled?['fresh','finish','repair','edit']:[],allowed_blocks:enabled&&bot.registry?.blocksArray?buildPalette(bot.registry).slice(0,512):[]};}
 function describeBuilds(bot) {
  const entries=(bot.buildRegistry?.all(bot.game?.dimension)||[]).filter(e=>e.from?.startsWith('persona:')).slice(-4).reverse();
- return entries.map((entry,index)=>({id:entry.id,name:entry.name,status:entry.status==='complete'&&!entry.personaVerifiedAt?'complete_unverified':entry.status,verified:entry.status==='complete'&&!!entry.personaVerifiedAt,verification:entry.personaVerification||null,origin:entry.origin,site_center:siteCenter(entry.origin,entry.design?.source?.size),bounds:entry.bounds,
-  distance:bot.entity?.position&&entry.origin?Math.round(Math.hypot(entry.origin.x-bot.entity.position.x,entry.origin.y-bot.entity.position.y,entry.origin.z-bot.entity.position.z)):null,
-  block_count:entry.blueprint?.blocks?.length||0,...(index===0&&entry.design?.source&&Buffer.byteLength(JSON.stringify(entry.design.source))<=24000?{schematic:entry.design.source}:{}),
- }));
+ // Bound aggregate world reads: footprint expansion is at most two cells and
+ // retained natural foundation checks at most six neighbours per cell.
+ let readBudget=4096;
+ return entries.map((entry,index)=>{
+  const cost=(entry.blueprint?.blocks?.length||0)*16+(entry.blueprint?.empty?.length||0);
+  const checked=cost>0&&cost<=readBudget;
+  const verification=checked?buildVerification(bot,{blueprint:entry.blueprint}):null;
+  if(checked)readBudget-=cost;
+  return {id:entry.id,name:entry.name,status:entry.status==='complete'&&!entry.personaVerifiedAt?'complete_unverified':entry.status,status_scope:'historical',
+   verified:verification?.verified===true,verification,verification_scope:checked?'current_loaded_world':'not_checked_budget',
+   last_verified_at:entry.personaVerifiedAt||null,last_verification:entry.personaVerification||null,
+   origin:entry.origin,site_center:siteCenter(entry.origin,entry.design?.source?.size),bounds:entry.bounds,
+   distance:bot.entity?.position&&entry.origin?Math.round(Math.hypot(entry.origin.x-bot.entity.position.x,entry.origin.y-bot.entity.position.y,entry.origin.z-bot.entity.position.z)):null,
+   block_count:entry.blueprint?.blocks?.length||0,...(index===0&&entry.design?.source&&Buffer.byteLength(JSON.stringify(entry.design.source))<=24000?{schematic:entry.design.source}:{}),
+  };
+ });
 }
 module.exports={siteAllowed,siteCenter,LIMITS,prepareBuild,assertBuildPolicy,verifyBuild,capabilities,describeBuilds,verifiedEditOwnership,buildVerification};

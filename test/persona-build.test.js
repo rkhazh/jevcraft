@@ -89,3 +89,20 @@ test('site selector filters invalid floor before scoring and accepts wide center
  const wideSource={...schematic(),size:[20,2,20],regions:[{from:[0,0,0],to:[19,0,19],block:'oak_planks',properties:null}]},wide=validateSchematic(wideSource,registry),tight={...binding,radius:1};
  const site=selectSchematicSite(makeBot(()=>64),wide,{anchor:tight.position,acceptOrigin:p=>siteAllowed(tight,p,wide.source.size)});assert.ok(site);assert.deepEqual(site.origin,{x:-10,y:64,z:-10});assert.equal(siteAllowed(tight,site.origin,wide.source.size),true);
 });
+
+test('registry descriptions separate dated completion from current loaded world evidence',()=>{
+ const entry={id:'house',from:'persona:Tolik',status:'complete',personaVerifiedAt:'2026-11-04T11:10:00Z',personaVerification:{verified:true},origin:{x:0,y:64,z:0},blueprint:{blocks:[{x:0,y:64,z:0,material:'oak_planks'}],empty:[]}};
+ const bot={game:{dimension:'overworld'},buildRegistry:{all:()=>[entry]},blockAt:()=>({name:'oak_planks'})};
+ let d=describeBuilds(bot)[0];assert.equal(d.verified,true);assert.equal(d.verification_scope,'current_loaded_world');assert.equal(d.last_verified_at,entry.personaVerifiedAt);
+ bot.blockAt=()=>null;d=describeBuilds(bot)[0];assert.equal(d.verified,false);assert.equal(d.verification.unknown_blocks,1);assert.equal(d.status,'complete');assert.equal(d.status_scope,'historical');assert.equal(d.last_verification.verified,true);
+ bot.blockAt=()=>({name:'glass'});d=describeBuilds(bot)[0];assert.equal(d.verified,false);assert.equal(d.verification.mismatched_blocks,1);
+ assert.equal(entry.personaVerification.verified,true);
+});
+test('snapshot build verification has a shared bounded read budget',()=>{
+ const entry={id:'large',from:'persona:Tolik',status:'complete',personaVerifiedAt:'yesterday',origin:{x:0,y:64,z:0},blueprint:{blocks:Array(1000).fill({x:0,y:64,z:0,material:'oak_planks'}),empty:[]}};
+ let reads=0;const bot={game:{dimension:'overworld'},buildRegistry:{all:()=>[entry]},blockAt:()=>{reads++;return null;}};
+ const d=describeBuilds(bot)[0];assert.equal(reads,0);assert.equal(d.verified,false);assert.equal(d.verification,null);assert.equal(d.verification_scope,'not_checked_budget');
+ entry.blueprint.blocks=Array.from({length:200},(_,x)=>({x,y:64,z:0,material:'oak_planks'}));
+ bot.buildRegistry.all=()=>[entry,{...entry,id:'newest'}];
+ const descriptions=describeBuilds(bot);assert.equal(reads,200);assert.equal(descriptions[0].verification_scope,'current_loaded_world');assert.equal(descriptions[1].verification_scope,'not_checked_budget');
+});
