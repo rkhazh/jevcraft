@@ -164,11 +164,11 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     fs.mkdirSync(path.dirname(commandLog), { recursive: true });
     fs.writeFileSync(path.join(stateDirectory, `${identity}-command-tree.json`), JSON.stringify(tree));
   });
-  let commandAccess;
+  let commandAccess, personaSpeech;
   bot.loadPlugin(() => { commandAccess = createCommandAccess(bot, {
     users: (process.env.MC_COMMAND_USERS || '').split(',').map(name => name.trim()).filter(Boolean),
     audit: event => { fs.mkdirSync(path.dirname(commandLog), { recursive: true }); fs.appendFileSync(commandLog, JSON.stringify(event) + '\n'); },
-  }); });
+  }); if(externalPersona)personaSpeech=require('./persona-chat').exclusivePersonaSpeech(bot); });
   const store = new GoalStore(path.join(stateDirectory, `${identity}.json`));
   const memoryIdentity = process.env.MC_WORLD_ID ? `${identity}-${process.env.MC_WORLD_ID.replace(/[^a-zA-Z0-9_-]/g, '_')}` : identity;
   // The base, its bed and the shelters are places in one world. Kept per
@@ -501,7 +501,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     if (!player || player.username === bot.username || typeof data.plainMessage !== 'string') return;
     const from = player.username;
     let request = data.plainMessage;
-    if (externalPersona) { persona.emit({type:'chat',user:from,msg:request.slice(0,1000)}); return; }
+    if (externalPersona) return;
     let literal;
     try { literal = requestedCommand(request, bot.username); }
     catch (err) { console.error(err); bot.chat('I could not use that command. Please check what you asked me to do.'); return; }
@@ -870,11 +870,12 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
       },
     });
+    require('./persona-chat').installPersonaChat(bot,{community:config.host==='mc.agicraft.ru'&&Number(config.port)===25565,ready:()=>ready&&!ended,emit:event=>persona.emit(event)});
     let lastSpeech=0;
     persona.chat = text=>{
       if (!require('./persona-transport').plainSpeech(text)) throw new Error('Plain speech required');
       if (!ready || ended || Date.now()-lastSpeech<1000) throw new Error('Speech unavailable');
-      lastSpeech=Date.now();bot.chat(text);
+      lastSpeech=Date.now();personaSpeech(text);
     };
   }
   return { bot, persona, closed, setVoiceState(sessionId,generation,state){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||!voice)return 'voice_unavailable';return voice.setState(generation,state);}, refreshVoice(sessionId){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||bot.game?.gameMode!=='survival'||!voice)return 'voice_unavailable';return voice.refresh();}, voiceSession(){return ready&&!ended&&persona?voice?.read(persona.sessionId)??null:null;}, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
