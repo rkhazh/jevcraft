@@ -398,7 +398,7 @@ function sitePositions(bot, width, depth, anchor, at) {
  * player's: a small number of them are preserved and built around rather than
  * demolished, and too many of them rule the site out.
  */
-function selectSchematicSite(bot, schematic, { anchor, prefer, owned = new Set(), protect = new Set(), at, baseY: floor } = {}) {
+function selectSchematicSite(bot, schematic, { anchor, prefer, owned = new Set(), protect = new Set(), at, baseY: floor, acceptOrigin=()=>true } = {}) {
   anchor = anchor || prefer;
   const o = bot.entity.position.floored(), [width, height, depth] = schematic.source.size;
   const isSurface = surfaceObserver(bot);
@@ -436,6 +436,7 @@ function selectSchematicSite(bot, schematic, { anchor, prefer, owned = new Set()
       .reduce((total, p) => total + Math.max(0, baseY - ground.get(`${p.x},${p.z}`) - 1), 0);
     if (plinth > SITE.plinth) continue;
     const origin = new Vec3(candidate.x, baseY, candidate.z);
+    if (!acceptOrigin(origin)) continue;
     let blocks = schematic.blocks.map(p => ({ ...p, ...origin.offset(p.x, p.y, p.z) }));
     // Unspecified foundation cells retain natural terrain rather than leaving
     // a moat around an inset facade. Air above the ground is verified exactly.
@@ -488,7 +489,7 @@ function selectSchematicSite(bot, schematic, { anchor, prefer, owned = new Set()
     if (!preserved.length && plinth === 0) break;
   }
   if (scored.length) return scored.sort((a, b) => a.cost - b.cost)[0].site;
-  const earthworks = where => require('./build-terrain').planTerrainSite(bot, schematic, { naturalGround, replaceable, at: where });
+  const earthworks = where => { const site=require('./build-terrain').planTerrainSite(bot, schematic, { naturalGround, replaceable, at: where }); return site&&acceptOrigin(site.origin)?site:null; };
   if (prefer) return earthworks(prefer);
   if (anchor) return null;
   return earthworks();

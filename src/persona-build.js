@@ -22,8 +22,17 @@ function siteBinding(value) {
  if(Object.keys(value).sort().join()!=='dimension,position,radius'||value.dimension!=='overworld'||!p||Object.keys(p).sort().join()!=='x,y,z'||![p.x,p.y,p.z].every(Number.isFinite)||Math.abs(p.x)>29999984||Math.abs(p.z)>29999984||p.y< -64||p.y>319||!Number.isFinite(value.radius)||value.radius<1||value.radius>32)throw Object.assign(new Error('Invalid requested build site'),{code:'invalid_build_site'});
  return structuredClone(value);
 }
-function assertSite(binding,origin,dim) {
- if(binding&&(dimension(dim)!==binding.dimension||!origin||(Math.abs(origin.y-binding.position.y)>4||Math.hypot(origin.x-binding.position.x,origin.z-binding.position.z)>binding.radius)))throw Object.assign(new Error('Structure is outside the requested build site'),{code:'build_site_mismatch'});
+function siteCenter(origin,size) {
+ if(!origin)return null;
+ return {x:origin.x+(Number.isFinite(size?.[0])?Math.floor(size[0]/2):0),y:origin.y,z:origin.z+(Number.isFinite(size?.[2])?Math.floor(size[2]/2):0)};
+}
+function siteAllowed(binding,origin,size,dim='overworld') {
+ if(!binding)return true;
+ const center=siteCenter(origin,size);
+ return dimension(dim)===binding.dimension&&!!center&&Math.abs(center.y-binding.position.y)<=4&&Math.hypot(center.x-binding.position.x,center.z-binding.position.z)<=binding.radius;
+}
+function assertSite(binding,origin,dim,size) {
+ if(!siteAllowed(binding,origin,size,dim))throw Object.assign(new Error('Structure is outside the requested build site'),{code:'build_site_mismatch'});
 }
 function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  if(!enabled)fail('building disabled');
@@ -36,7 +45,7 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  const entry=spec.build_id?bot.buildRegistry?.find(spec.build_id):null;
  if(spec.mode!=='fresh') {
   if(!entry||entry.from!==principal||dimension(entry.dimension)!==dimension(bot.game?.dimension))fail('unknown or unowned structure');
-  assertSite(binding,entry.origin,entry.dimension);
+  assertSite(binding,entry.origin,entry.dimension,entry.design?.source?.size);
   const distance=Math.hypot(entry.origin.x-here.x,entry.origin.y-here.y,entry.origin.z-here.z);
   if(distance>1024)fail('structure out of reach');
   base.personaBuildPolicy.anchor={...entry.origin};
@@ -91,7 +100,7 @@ function assertBuildPolicy(goal) {
  const source=goal.design?.source;
  if(source&&(source.size.some((n,i)=>n>LIMITS.max_size[i])||source.regions.length>LIMITS.max_regions))fail('design exceeds policy');
  const bp=goal.blueprint;if(!bp)return;
- assertSite(goal.personaBuildPolicy.site_binding,bp.origin,goal.personaBuildPolicy.site_binding?.dimension);
+ assertSite(goal.personaBuildPolicy.site_binding,bp.origin,goal.personaBuildPolicy.site_binding?.dimension,goal.design?.source?.size);
  if(!Array.isArray(bp.blocks)||bp.blocks.length>LIMITS.max_blocks)fail('placed geometry exceeds policy');
  const clear=bp.terrain?.clear||[],fill=bp.terrain?.fill||[];
  if(clear.length+fill.length>2048)fail('earthworks exceed policy');
@@ -124,9 +133,9 @@ function verifyBuild(bot,goal){return buildVerification(bot,goal).verified;}
 function capabilities(bot,enabled){return {...LIMITS,enabled,modes:enabled?['fresh','finish','repair','edit']:[],allowed_blocks:enabled&&bot.registry?.blocksArray?buildPalette(bot.registry).slice(0,512):[]};}
 function describeBuilds(bot) {
  const entries=(bot.buildRegistry?.all(bot.game?.dimension)||[]).filter(e=>e.from?.startsWith('persona:')).slice(-4).reverse();
- return entries.map((entry,index)=>({id:entry.id,name:entry.name,status:entry.status==='complete'&&!entry.personaVerifiedAt?'complete_unverified':entry.status,verified:entry.status==='complete'&&!!entry.personaVerifiedAt,verification:entry.personaVerification||null,origin:entry.origin,bounds:entry.bounds,
+ return entries.map((entry,index)=>({id:entry.id,name:entry.name,status:entry.status==='complete'&&!entry.personaVerifiedAt?'complete_unverified':entry.status,verified:entry.status==='complete'&&!!entry.personaVerifiedAt,verification:entry.personaVerification||null,origin:entry.origin,site_center:siteCenter(entry.origin,entry.design?.source?.size),bounds:entry.bounds,
   distance:bot.entity?.position&&entry.origin?Math.round(Math.hypot(entry.origin.x-bot.entity.position.x,entry.origin.y-bot.entity.position.y,entry.origin.z-bot.entity.position.z)):null,
   block_count:entry.blueprint?.blocks?.length||0,...(index===0&&entry.design?.source&&Buffer.byteLength(JSON.stringify(entry.design.source))<=24000?{schematic:entry.design.source}:{}),
  }));
 }
-module.exports={LIMITS,prepareBuild,assertBuildPolicy,verifyBuild,capabilities,describeBuilds,verifiedEditOwnership,buildVerification};
+module.exports={siteAllowed,siteCenter,LIMITS,prepareBuild,assertBuildPolicy,verifyBuild,capabilities,describeBuilds,verifiedEditOwnership,buildVerification};

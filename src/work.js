@@ -5071,6 +5071,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
   if (!goal.blueprint) {
     // Anchor the site where the player asked for it, and treat Jev's own past
     // structures as ground to stand on and material to build into.
+    const acceptOrigin = origin => require('./persona-build').siteAllowed(goal.personaBuildPolicy?.site_binding,origin,schematic.source.size,dimensionName(bot));
     const registry = bot.buildRegistry;
     const edited = goal.buildContinuation?.mode === 'edit' ? registry?.find(goal.buildContinuation.target) : null;
     // When the designer says where the old building sits in its new drawing,
@@ -5088,11 +5089,11 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     const here = bot.entity.position.floored();
     const proposed = !goal.buildAnchor && !at && schematic.site
       ? { x: here.x + schematic.site[0], y: here.y + schematic.site[1], z: here.z + schematic.site[2] } : null;
-    goal.blueprint = selectSchematicSite(bot, schematic, { anchor: goal.buildAnchor, prefer: proposed, owned, protect, at, baseY: proposed?.y });
-    if (!goal.blueprint && proposed) goal.blueprint = selectSchematicSite(bot, schematic, { owned, protect });
+    goal.blueprint = selectSchematicSite(bot, schematic, { anchor: goal.buildAnchor, prefer: proposed, owned, protect, at, baseY: proposed?.y, acceptOrigin });
+    if (!goal.blueprint && proposed) goal.blueprint = selectSchematicSite(bot, schematic, { owned, protect, acceptOrigin });
     // A dream's anchor is where the village would like the next part,
     // not where a player pointed. When nothing fits there, anywhere near will do.
-    if (!goal.blueprint && goal.buildAnchor && goal.dream && !at) { delete goal.buildAnchor; goal.blueprint = selectSchematicSite(bot, schematic, { owned, protect }); }
+    if (!goal.blueprint && goal.buildAnchor && goal.dream && !at) { delete goal.buildAnchor; goal.blueprint = selectSchematicSite(bot, schematic, { owned, protect, acceptOrigin }); }
     if (!goal.blueprint) {
       // Wandering off to find ground elsewhere is the wrong answer to a spot
       // the player chose: they asked for it there, so say it will not work.

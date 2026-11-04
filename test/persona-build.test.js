@@ -79,3 +79,13 @@ test('requested surface floor cannot bind a cave directly below, while roof heig
  goal.blueprint={origin:{x:0,y:50,z:0},blocks:[]};assert.throws(()=>assertBuildPolicy(goal),e=>e.code==='build_site_mismatch');
  goal.blueprint={origin:{x:0,y:64,z:0},blocks:[{x:0,y:78,z:0,material:'oak_planks'}]};assert.doesNotThrow(()=>assertBuildPolicy(goal));
 });
+test('site selector filters invalid floor before scoring and accepts wide centered footprints at small radius',()=>{
+ const {Vec3}=require('vec3'),{validateSchematic,selectSchematicSite}=require('../src/designer'),{siteAllowed}=require('../src/persona-build');
+ const makeBot=height=>({registry,game:{dimension:'overworld',minY:0,height:90},entity:{position:new Vec3(100,65,100)},entities:{},blockAt:p=>({name:p.y<=height(p.x,p.z)?'dirt':'air',boundingBox:p.y<=height(p.x,p.z)?'block':'empty',position:p,stateId:p.y<=height(p.x,p.z)?1:0})});
+ const binding={position:{x:0,y:65,z:0},dimension:'overworld',radius:10},small=validateSchematic(schematic(),registry);
+ const bot=makeBot((x,z)=>x>=-2&&x<=2&&z>=-2&&z<=2?59:64);
+ const first=selectSchematicSite(bot,small,{anchor:binding.position});assert.equal(first.origin.y,59);
+ const filtered=selectSchematicSite(bot,small,{anchor:binding.position,acceptOrigin:p=>siteAllowed(binding,p,small.source.size)});assert.ok(filtered);assert.equal(filtered.origin.y,64);
+ const wideSource={...schematic(),size:[20,2,20],regions:[{from:[0,0,0],to:[19,0,19],block:'oak_planks',properties:null}]},wide=validateSchematic(wideSource,registry),tight={...binding,radius:1};
+ const site=selectSchematicSite(makeBot(()=>64),wide,{anchor:tight.position,acceptOrigin:p=>siteAllowed(tight,p,wide.source.size)});assert.ok(site);assert.deepEqual(site.origin,{x:-10,y:64,z:-10});assert.equal(siteAllowed(tight,site.origin,wide.source.size),true);
+});
