@@ -8172,6 +8172,9 @@ function wantedItems(goal = {}) {
 }
 
 async function keepRoom(bot, task, goal) {
+  // A persona hold has no next recipe/blueprint to explain why materials are
+  // carried. Optional tidying must not discard supplies for its next goal.
+  if (goal.kind === 'survive' && goal.personaHold === true) return;
   // In Creative nothing carried is scarce: clear what the work does not
   // need instead of dropping it in the players' world.
   if (bot.game?.gameMode === 'creative') {

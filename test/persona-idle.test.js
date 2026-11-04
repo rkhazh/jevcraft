@@ -15,3 +15,10 @@ test('normal idle preserves survival then loot then background work priority',as
 test('survival cancellation or errors propagate without entering background work',async()=>{
  const error=new Error('cancelled');await assert.rejects(idleBackgroundStep({hold:true,survive:async()=>{throw error},stopMotion:()=>assert.fail('stopped')}),e=>e===error);
 });
+test('full inventory retains sand and clay during persona hold without optional tidying',async()=>{
+ const {keepRoom}=require('../src/work');
+ const slots=Array.from({length:36},(_,i)=>({name:i%2?'clay_ball':'sand',count:64,slot:i+9}));
+ const before=structuredClone(slots);let throws=0;
+ const bot={game:{gameMode:'survival'},entity:{onGround:true},inventory:{slots,items:()=>slots,emptySlotCount:()=>0},tossStack:async()=>{throws++;throw new Error('must not discard')},chat:()=>assert.fail('tidy narration')};
+ await keepRoom(bot,{check:()=>{}},{kind:'survive',personaHold:true});assert.equal(throws,0);assert.deepEqual(slots,before);
+});
