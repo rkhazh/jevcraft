@@ -214,7 +214,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // Whatever is active pays for the calls made on its behalf; with nothing
   // active, an idle bot that has a dream is still that dream's cost.
   const routed = withRun(client, () => active?.goal.ledgerRun ?? dreamStore.read()?.ledgerRun);
-  const contextual = getGoal => externalPersona ? require('./persona-context').withPersonaContext(routed,getGoal,goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId)) : routed;
+  const contextual = getGoal => externalPersona ? require('./persona-context').withPersonaContext(routed,getGoal,goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId),{getProfile:()=>persona?.actorProfile}) : routed;
   const dreamName = (key, text) => `dream · ${key === 'custom' ? text : DREAMS[key].title}`;
   // The dream's run in the ledger. A standing from before the ledger
   // existed gets one now, dated from when the dream was given.
@@ -242,7 +242,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       const entry=reports.record(bot,survival.state,report,{source,attribution,sessionId:persona.sessionId,worldId:process.env.MC_WORLD_ID||identity});
       if(entry)saveSurvival();
     };
-    survival.onReport=report=>record(report,'controller_report');
+    bot._observeActionReports=reports.observer(report=>record(report,'controller_report'));
     bot._onActionOutcome=({outcome,reason,...attribution})=>record({action:attribution.controller,outcome,reason},'scope_end',attribution);
   }
   const saveGoal = goal => { if (!ended && (!goal.personaGoalId || persona?.valid(goal.personaGoalId))) { memory.recordGoal(goal, bot); world.harvest(goal); store.save(goal); } };
@@ -452,7 +452,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       return launchable;
     };
     session.promise = withActionScope(bot, 'idle', goal, () => runIdle(bot, task, goal, { save: g => { if (!ended) { world.harvest(g); idleStore.save(g); memory.flush(); } saveSurvival(); } }, {
-      survival, decisionClient: routed, until,
+      survival, decisionClient: contextual(()=>goal), until,
       onStep: g => { console.log(JSON.stringify({ idle: true, survivalAction: g.survivalAction, decision: g.decisions?.at(-1)?.path, health: bot.health, food: bot.food, position: bot.entity.position, error: g.lastError })); observation?.sample('step', undefined, g); },
     })).catch(err => {
       if (err.name !== 'Cancelled') {

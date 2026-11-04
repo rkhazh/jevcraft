@@ -7,6 +7,30 @@ const {safeText}=require('./persona-execution');
 const {actionAttribution}=require('./action-scope');
 const point=p=>p&&[p.x,p.y,p.z].every(Number.isFinite)?{x:p.x,y:p.y,z:p.z}:null;
 const significant=e=>e.source==='controller_report'||['failed','interrupted'].includes(e.report?.outcome);
+// Native domains share this field but do not all call Survival.report. Watch
+// assignments once per goal, before execution; restored contents are history,
+// not a new action. The field remains ordinary enumerable serialized data.
+function observer(onReport){
+ const watched=new WeakSet(),reported=new WeakMap();
+ return goal=>{
+  if(!goal||typeof goal!=='object'||watched.has(goal))return;
+  let current=goal.survivalAction;
+  if(current&&typeof current==='object')reported.set(current,JSON.stringify(details(current)));
+  Object.defineProperty(goal,'survivalAction',{enumerable:true,configurable:true,
+   get:()=>current,
+   set:report=>{
+    current=report;
+    if(report&&typeof report==='object')try{
+     const signature=JSON.stringify(details(report));
+     // saveWork relays a child's exact report object into the parent. That is
+     // transport, not a new statement by whichever controller performs the save.
+     if(reported.get(report)===signature)return;
+     reported.set(report,signature);onReport(report);
+    }catch(err){console.error(`[persona] native evidence unavailable: ${err?.name||'Error'}`);}
+   }});
+  watched.add(goal);
+ };
+}
 function statement(entry){
  const {id,observed_at,observed,...frame}=entry,report={...entry.report};
  // Some native statements repeat observed vitals. Regeneration alone is not
@@ -71,4 +95,4 @@ function tail(state,worldId){
  }
  return out.sort((a,b)=>a.observed_at-b.observed_at);
 }
-module.exports={record,tail};
+module.exports={record,tail,observer};

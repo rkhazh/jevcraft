@@ -10,6 +10,7 @@ async function withActionScope(bot,controller,goal,run){
  if(controller==='work'&&goal?.personaGoalId)scope.intent={goal_id:goal.personaGoalId,owner:scope};
  else if(controller!=='idle')scope.intent=parent?.intent||(!parent&&goal?.personaGoalId?{goal_id:goal.personaGoalId,owner:scope}:null);
  try{return await actions.run(scope,async()=>{
+  try{bot._observeActionReports?.(goal);}catch(err){console.error(`[persona] report observation unavailable: ${err?.name||'Error'}`);}
   let outcome='yielded',reason=null;
   try{return await run();}
   catch(err){outcome=['NeedsAir','NeedsSafety','Cancelled'].includes(err?.name)?'interrupted':'failed';reason=String(err?.message||err);throw err;}

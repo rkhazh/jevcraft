@@ -8,11 +8,43 @@ const botOf=()=>({game:{dimension:'overworld'},entity:{position:new Vec3(1.5,64,
 
 test('native reports reach the observer before a subsequent action overwrites them',()=>{
  const bot=botOf(),seen=[],goal={survival:{}};
- const survival=Object.assign(Object.create(Survival.prototype),{bot,state:goal.survival,onReport:(report)=>seen.push(structuredClone(report))});
+ const observe=require('../src/body-reports').observer(report=>seen.push(structuredClone(report)));
+ observe(goal);
+ const survival=Object.assign(Object.create(Survival.prototype),{bot,state:goal.survival});
  survival.report(goal,()=>{}, {action:'observed_arrival',position:{x:1.5,y:64,z:2.5},supported:true,surface:true});
  survival.report(goal,()=>{}, {action:'food_trip',distance:12});
  assert.deepEqual(seen.map(r=>r.action),['observed_arrival','food_trip']);
  assert.equal(seen[0].surface,true);assert.equal(goal.survivalAction.action,'food_trip');
+});
+
+test('direct native report assignments are observed without replaying restored history',()=>{
+ const reports=require('../src/body-reports'),seen=[],goal={survivalAction:{action:'historical'}};
+ const observe=reports.observer(r=>seen.push(structuredClone(r)));
+ observe(goal);observe(goal);assert.equal(seen.length,0);
+ // Native domains also assign this existing field directly, outside Survival.report.
+ goal.survivalAction={action:'food_trip',distance:12};
+ goal.survivalAction={action:'food_collected',count:1};
+ assert.deepEqual(seen.map(r=>r.action),['food_trip','food_collected']);
+ assert.deepEqual(JSON.parse(JSON.stringify(goal)),{survivalAction:{action:'food_collected',count:1}});
+ const restored=JSON.parse(JSON.stringify(goal));observe(restored);assert.equal(seen.length,2);
+ restored.survivalAction={action:'another_method'};assert.equal(seen.length,3);
+});
+
+test('relaying a child report cannot reattribute it to the parent save callback',async()=>{
+ const reports=require('../src/body-reports'),bot=botOf(),state={},parent={personaGoalId:'g'},child={},sessionId=randomUUID();
+ bot._observeActionReports=reports.observer(report=>reports.record(bot,state,report,{source:'controller_report',sessionId,worldId:'w'}));
+ await withActionScope(bot,'work',parent,async()=>{
+  await withActionScope(bot,'survival',child,async()=>{child.survivalAction={action:'native_method',count:1};});
+  // work.saveWork relays this very object after the child's controller returns.
+  parent.survivalAction=child.survivalAction;
+ });
+ assert.equal(state.bodyReports.length,1);assert.equal(state.bodyReports[0].controller,'survival');
+ assert.equal(state.bodyReports[0].goal_id,null);assert.equal(state.bodyReports[0].interrupted_goal_id,'g');
+ await withActionScope(bot,'work',parent,async()=>{parent.survivalAction.count=2;parent.survivalAction=parent.survivalAction;});
+ assert.equal(state.bodyReports.length,2);assert.equal(state.bodyReports[1].report.count,2);
+ const historical={action:'past_method'},restored={survivalAction:historical};bot._observeActionReports(restored);
+ await withActionScope(bot,'work',parent,async()=>{parent.survivalAction=historical;});
+ assert.equal(state.bodyReports.length,2);
 });
 
 test('scope outcomes retain actual controller even after an interruption',async()=>{

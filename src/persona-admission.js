@@ -6,11 +6,20 @@ const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v
 function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({})}) {
  rendezvous=require('./persona-rendezvous').validateRendezvous(rendezvous);
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
- let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve();
+ let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve(), actorProfile=null;
+ function setProfile(profile,id){
+  const rejected=reason=>({status:'rejected',reason,session_id:sessionId});
+  if(closed||id!==sessionId)return rejected('wrong_session');
+  if(!require('./persona-context').validProfile(profile))return rejected('invalid_persona_profile');
+  if(actorProfile&&stable(actorProfile)!==stable(profile))return rejected('profile_already_set');
+  if(active&&active.proposal.persona_id!==profile.persona_id)return rejected('wrong_persona');
+  actorProfile=structuredClone(profile);
+  return {status:'ready',session_id:sessionId,persona_id:profile.persona_id};
+ }
  const enqueue=fn=>{const p=serial.then(fn);serial=p.catch(()=>{});return p};
  function emit(data) { const event={...data,event_id:randomUUID(),session_id:sessionId,sequence:++sequence,observed_at:Date.now()/1000}; if(data.type==='goal'&&['complete','blocked','failed','expired','cancelled'].includes(data.status))lastResult=structuredClone(event); log.push(event);if(log.length>1000)log.shift();return event; }
  function snapshot() {
-  const state=read(), id=randomUUID(), now=Date.now()/1000;
+  const state={...read(),actor_profile:{supported:true,persona_id:closed?null:actorProfile?.persona_id??null}}, id=randomUUID(), now=Date.now()/1000;
   observations.set(id,{at:now,mono:performance.now()});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
   return {...state,last_result:lastResult?structuredClone(lastResult):null,movement_capabilities:{allow_visible_players:allowVisiblePlayers,local_move:{...movementAffordances(),enabled:allowLocalMove,max_distance:16,arrival_distance:1.5}},rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
  }
@@ -38,6 +47,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   if(p.schema_version!==1||p.state!=='proposed'||typeof p.goal_id!=='string'||!/^[0-9a-f-]{36}$/i.test(p.goal_id)||typeof p.persona_id!=='string'||!p.persona_id.length||p.persona_id.length>128)return 'invalid_envelope';
   if(Object.hasOwn(p,'persona_context')&&!require('./persona-context').validContext(p.persona_context))return 'invalid_persona_context';
   if(closed||p.session_id!==sessionId)return 'wrong_session';
+  if(actorProfile&&p.persona_id!==actorProfile.persona_id)return 'wrong_persona';
   const now=Date.now()/1000, observation=observations.get(p.observation_id);
   if(!Number.isFinite(p.issued_at)||!Number.isFinite(p.expires_at)||p.issued_at>now+1||p.expires_at<=now||p.expires_at-p.issued_at>120||p.expires_at<=p.issued_at)return 'expired';
   if(!observation||performance.now()-observation.mono>5000)return 'stale_observation';
@@ -68,6 +78,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:p.expires_at};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
  }
  return {get sessionId(){return sessionId;},snapshot,valid,emit,submit:p=>enqueue(()=>submitNow(p)),cancel:id=>enqueue(()=>cancelNow(id)),
+  get actorProfile(){return !closed&&actorProfile?structuredClone(actorProfile):null;},setProfile,
   events(after) {
    const pending=log.filter(e=>e.sequence>after);
    const packet={events:[],cursor:after,oldest_sequence:log[0]?.sequence??sequence,has_more:false};
