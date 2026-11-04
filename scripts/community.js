@@ -5,6 +5,7 @@ const {TypeSafe}=require('../src/typesafe'),{AttemptBudget}=require('../src/atte
 const {createSession}=require('../src/session'),{communityAuth}=require('../src/community-auth');
 async function main(){
  const profile=require('../src/community-profile').communityProfile(process.env.JEV_COMMUNITY_CHARACTER||'Skipper');
+ const rendezvous=require('../src/persona-rendezvous').validateRendezvous(process.env.JEV_COMMUNITY_RENDEZVOUS?JSON.parse(process.env.JEV_COMMUNITY_RENDEZVOUS):null);
  const directory=process.env.JEV_COMMUNITY_RUN_DIRECTORY;
  if(!directory||!path.isAbsolute(directory))throw new Error('Community run directory required');
  const seconds=Number(process.env.JEV_COMMUNITY_SECONDS||600),limit=Number(process.env.JEV_COMMUNITY_HTTP_LIMIT||60);
@@ -16,7 +17,7 @@ async function main(){
  const stateDirectory=require('../src/community-profile').communityStateDirectory(profile.character,directory);
  fs.mkdirSync(stateDirectory,{recursive:true,mode:0o700});
  // Lock profile options even if the shell inherited local experiment settings.
- Object.assign(process.env,{JEV_SVC_ENABLED:process.env.JEV_SVC_ENABLED==='1'?'1':'0',JEV_SVC_PROTOCOL:'20',JEV_PROVIDER:'openrouter',OPENROUTER_JEV_MODEL:'typesafe/jev-1.14',MC_WORLD_ID:profile.worldId,JEV_PERSONA_MODE:'1',JEV_PERSONA_BUILD:profile.build?'1':'0',JEV_NO_QUIET_RESTART:'1',MC_COMMAND_USERS:'',JEV_PERSONA_PLAYERS:'',JEV_PERSONA_PORT:String(profile.port)});
+ Object.assign(process.env,{JEV_SVC_ENABLED:process.env.JEV_SVC_ENABLED==='1'?'1':'0',JEV_SVC_PROTOCOL:'20',JEV_PROVIDER:'openrouter',OPENROUTER_JEV_MODEL:'typesafe/jev-1.14',MC_WORLD_ID:profile.worldId,JEV_PERSONA_MODE:'1',JEV_PERSONA_BUILD:profile.build?'1':'0',JEV_NO_QUIET_RESTART:'1',MC_COMMAND_USERS:'',JEV_PERSONA_PLAYERS:rendezvous?.target||'',JEV_PERSONA_PORT:String(profile.port)});
  let session,server,timer,killTimer;let stopped=false;
  function stop(reason){if(stopped)return;stopped=true;console.log(JSON.stringify({communityStop:reason}));session?.shutdown();killTimer=setTimeout(()=>process.exit(1),5000);killTimer.unref();}
  const budget=new AttemptBudget(limit,{record:event=>fs.appendFileSync(path.join(directory,'http-attempts.jsonl'),JSON.stringify(event)+'\n',{mode:0o600}),onExhausted:()=>stop('HTTP attempt cap reached')});
@@ -26,7 +27,7 @@ async function main(){
  timer=setTimeout(()=>stop('600-second maximum elapsed'),seconds*1000);
  try{
   server=await require('../src/persona-transport').startPersonaTransport({getSession:()=>session,token:process.env.JEV_PERSONA_TOKEN,port:profile.port});
-  session=createSession(config,client,{stateDirectory,authenticate:(bot,cfg)=>communityAuth(bot,cfg,{password,warpAi:process.env.JEV_COMMUNITY_WARP_AI==='1',diagnostic:event=>console.log(JSON.stringify({communityAuth:event})),allowRegister:process.env.JEV_COMMUNITY_FIRST_REGISTER==='1',successText:process.env.MC_LOGIN_SUCCESS_TEXT})});
+  session=createSession(config,client,{stateDirectory,rendezvous,authenticate:(bot,cfg)=>communityAuth(bot,cfg,{password,warpAi:process.env.JEV_COMMUNITY_WARP_AI==='1',diagnostic:event=>console.log(JSON.stringify({communityAuth:event})),allowRegister:process.env.JEV_COMMUNITY_FIRST_REGISTER==='1',successText:process.env.MC_LOGIN_SUCCESS_TEXT})});
   client.ledger=require('../src/http-usage-ledger').attachHttpUsageLedger(client.ledger,path.join(directory,'http-usage.jsonl'),{maxEntries:limit,onError:()=>stop('HTTP usage ledger unavailable')});
   const outcome=await session.closed;console.log(JSON.stringify({communityClosed:outcome,httpAttempts:budget.used,httpLimit:limit}));
  }finally{clearTimeout(timer);clearTimeout(killTimer);session?.shutdown();if(server)await new Promise(resolve=>server.close(resolve));}

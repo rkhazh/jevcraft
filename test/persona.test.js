@@ -79,3 +79,18 @@ test('build validation detail stays bounded and reason code unchanged; internal 
  const p={...f.proposal(),spec:{kind:'build',request:'Build',mode:'fresh',build_id:null,schematic:{}}};const r=await f.persona.submit(p);assert.equal(r.reason,'invalid_build_geometry');assert.equal(r.detail.length,240);assert.ok(!r.detail.includes('\n'));assert.equal(f.launches(),0);await f.persona.close();
  const internal=fixture({checkBuild(){throw new Error('secret internal message')}});const r2=await internal.persona.submit({...internal.proposal(),spec:p.spec});assert.equal(r2.reason,'invalid_build_geometry');assert.ok(!('detail' in r2));await internal.persona.close();
 });
+test('operator rendezvous admits only matching come and never fabricates observed player or completion',async()=>{
+ let started;const rendezvous={target:'Alex',position:{x:100,y:64,z:200},dimension:'overworld'};
+ const f=fixture({rendezvous,start:async spec=>{started=spec}});f.body.players=[];f.body.position={...rendezvous.position};f.body.player_positions={};
+ const snapshot=f.persona.snapshot();assert.deepEqual(snapshot.rendezvous,rendezvous);assert.deepEqual(snapshot.players,[]);assert.deepEqual(snapshot.player_positions,{});
+ snapshot.rendezvous.position.x=999;
+ for(const spec of [{kind:'come',target:'Other'},{kind:'follow',target:'Alex'},{kind:'come',target:'Alex',requesterPosition:{x:1,y:2,z:3}}])assert.equal((await f.persona.submit({...f.proposal(),spec})).status,'rejected');
+ const proposal={...f.proposal(),spec:{kind:'come',target:'Alex'}};assert.equal((await f.persona.submit(proposal)).status,'accepted');assert.deepEqual(started.requesterPosition,rendezvous.position);
+ f.persona.finish(proposal.goal_id,'complete');let terminal=f.persona.events(0).events.at(-1);assert.equal(terminal.verified,false);assert.equal(terminal.status,'failed');
+ const next={...f.proposal(),spec:{kind:'come',target:'Alex'}};await f.persona.submit(next);f.body.player_positions.Alex={...rendezvous.position};f.persona.finish(next.goal_id,'complete');terminal=f.persona.events(0).events.at(-1);assert.equal(terminal.verified,true);await f.persona.close();
+});
+test('operator rendezvous input has bounded finite coordinates and Java player name',()=>{
+ const {validateRendezvous}=require('../src/persona-rendezvous');const good={target:'Alex',position:{x:1,y:64,z:2},dimension:'overworld'};
+ assert.equal(validateRendezvous(null),null);
+ for(const bad of [{...good,target:'/op'},{...good,dimension:'the_nether'},{...good,position:{x:NaN,y:64,z:2}},{...good,position:{x:1,y:400,z:2}}])assert.throws(()=>validateRendezvous(bad));
+});

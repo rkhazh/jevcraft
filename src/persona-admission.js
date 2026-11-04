@@ -3,7 +3,8 @@ const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === [...keys].sort().join();
 const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v) ? v.map(x=>JSON.parse(stable(x))) : Object.fromEntries(Object.keys(v).sort().map(k=>[k,JSON.parse(stable(v[k]))]))) : v);
-function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local'}) {
+function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null}) {
+ rendezvous=require('./persona-rendezvous').validateRendezvous(rendezvous);
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
  let active=null, sequence=0, closed=false, serial=Promise.resolve();
  const enqueue=fn=>{const p=serial.then(fn);serial=p.catch(()=>{});return p};
@@ -11,7 +12,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
  function snapshot() {
   const state=read(), id=randomUUID(), now=Date.now()/1000;
   observations.set(id,{at:now,mono:performance.now()});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
-  return {...state,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
+  return {...state,rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
  }
  function valid(id) {return !closed && active?.proposal.goal_id===id && active.deadline>performance.now();}
  async function cancelNow(id, status='cancelled') {
@@ -30,7 +31,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   const state=read();if(!state.connected||state.health<8||!['overworld','minecraft:overworld'].includes(state.dimension))return 'unsafe_state';
   const s=p.spec;
   if(['obtain','craft'].includes(s?.kind)) {if(!exact(s,['kind','item','count','deliver'])||!items.includes(s.item)||!state.items.includes(s.item)||!Number.isInteger(s.count)||s.count<1||s.count>64||s.deliver!==false)return 'unsupported_spec';}
-  else if(['follow','come'].includes(s?.kind)){if(!exact(s,['kind','target'])||!players.includes(s.target)||!state.players.includes(s.target))return 'unsupported_spec';}
+  else if(['follow','come'].includes(s?.kind)){if(!exact(s,['kind','target'])||!players.includes(s.target)||(!state.players.includes(s.target)&&!(s.kind==='come'&&rendezvous?.target===s.target&&['overworld','minecraft:overworld'].includes(state.dimension))))return 'unsupported_spec';}
   else if(s?.kind==='build') {
    if(!exact(s,['kind','request','mode','build_id','schematic'])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
    try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(err){if(!err.code&&typeof err.validationDetail==='string')return {reason:'invalid_build_geometry',detail:err.validationDetail.replace(/[\p{Cc}\p{Cf}]/gu,' ').slice(0,240)};return err.code||'invalid_build_geometry';}
@@ -47,7 +48,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   reason=check(p);if(reason)return rejection(p,reason);
   const current={proposal:structuredClone(p),deadline:performance.now()+(p.expires_at-Date.now()/1000)*1000};active=current;
   current.timer=setTimeout(()=>enqueue(()=>cancelNow(p.goal_id,'expired')).catch(()=>{}),Math.max(1,current.deadline-performance.now()));current.timer.unref();
-  try{await start({...p.spec,personaGoalId:p.goal_id,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='build'?p.spec.request:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
+  try{await start({...p.spec,...(p.spec.kind==='come'&&rendezvous?.target===p.spec.target?{requesterPosition:{...rendezvous.position}}:{}),personaGoalId:p.goal_id,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='build'?p.spec.request:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
   catch(err){await cancelNow(p.goal_id,'failed');return rejection(p,'start_failed');}
   if(!valid(p.goal_id)){await cancelNow(p.goal_id,'expired');return rejection(p,'expired');}
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:p.expires_at};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
