@@ -1,7 +1,57 @@
 'use strict';
 const {AsyncLocalStorage}=require('node:async_hooks');
 const {Vec3}=require('vec3');
-const permits=new AsyncLocalStorage(),dispatches=new AsyncLocalStorage(),key=p=>`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
+const {actionAttribution}=require('./action-scope');
+const permits=new AsyncLocalStorage(),dispatches=new AsyncLocalStorage(),expectations=new AsyncLocalStorage(),expectationClients=new WeakSet(),expectationUpdates=new WeakSet(),key=p=>`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
+const expectationRefused=()=>Object.assign(new Error('Mutation expectation expired or the exact recorded block changed before dispatch'),{name:'StructureMutationRefused'});
+function checkExpectation(scope,bot,operation,p){
+ for(let expected=scope;expected;expected=expected.parent){
+  if(expected.bot!==bot)continue;
+  if(expected.error)throw expected.error;
+  if(!expected.active||expected.client!==bot._client||expected.dimension!==bot.game?.dimension||expected.operation!==operation||expected.cell!==key(p))throw expectationRefused();
+  expected.check?.();
+  const block=bot.blockAt(p);
+  if(!block||block.name!==expected.name||block.stateId!==expected.stateId)throw expectationRefused();
+ }
+}
+function installExpectationFence(bot){
+ const client=bot._client;
+ if(!client||typeof client.write!=='function')throw new Error('A network dispatch guard is required for a mutation expectation');
+ if(!expectationClients.has(client)){
+  expectationClients.add(client);const write=client.write;
+  client.write=function(name,packet){
+   const scope=expectations.getStore();
+   if(!scope||scope.bot!==bot)return write.call(this,name,packet);
+   const operation=name==='block_dig'&&[0,2].includes(packet.status)?'dig':name==='block_place'?'place':null;
+   if(!operation)return write.call(this,name,packet); // Dig cancellation remains available.
+   try{checkExpectation(scope,bot,operation,packet.location);}
+   catch(error){
+    scope.error=error;const dispatch=dispatches.getStore();if(dispatch?.bot===bot)dispatch.error=error;
+    if(operation==='dig'&&packet.status===2){try{bot.stopDigging?.();}catch(_){}return false;}
+    throw error;
+   }
+   return write.call(this,name,packet);
+  };
+ }
+ if(!expectationUpdates.has(bot)&&typeof bot._updateBlockState==='function'){
+  expectationUpdates.add(bot);const update=bot._updateBlockState;
+  bot._updateBlockState=function(p,state){
+   const expected=expectations.getStore();
+   if(expected?.bot===bot&&expected.error&&expected.cell===key(p)&&state===0)return;
+   return update.call(this,p,state);
+  };
+ }
+}
+// Validation only: this never creates a build permit or changes the ordinary
+// registered-structure check. Equip/look/timer waits all retain this scope.
+async function withMutationExpectation(bot,{operation,position,name,stateId,check},run){
+ if(operation!=='dig'||!position||!['x','y','z'].every(k=>Number.isInteger(position[k]))||typeof name!=='string'||!Number.isInteger(stateId)||stateId<0||check!==undefined&&typeof check!=='function')throw new Error('An exact dig position, material and state are required');
+ installExpectationFence(bot);
+ const p=new Vec3(position.x,position.y,position.z),scope={bot,client:bot._client,dimension:bot.game?.dimension,operation,cell:key(p),name,stateId,check,parent:expectations.getStore(),active:true,error:null};
+ checkExpectation(scope,bot,operation,p);
+ try{const result=await expectations.run(scope,run);if(scope.error)throw scope.error;return result;}
+ catch(error){throw scope.error||error;}finally{scope.active=false;}
+}
 function mutationCells(bot,operation,p){
  const block=operation==='dig'?bot.blockAt(p):null,material=block?.name||bot.heldItem?.name,properties=block?.getProperties?.()||{};
  if(operation==='dig'&&material?.endsWith('_door')&&!['upper','lower'].includes(properties.half))throw new Error('Unknown door half');
@@ -32,6 +82,11 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
  const audit=data=>{if(records++<512)record({at:Date.now()/1000,dimension:String(bot.game?.dimension||''),...data});};
  bot._registeredStructureProtection=protectedAt;
  bot._structureMutationPermitValid=validGoal;
+ const attribution=permit=>{
+  const current=actionAttribution(bot);
+  // A validated explicit build operation also identifies standalone callers.
+  return current.controller==='unknown'&&permit?{controller:'work',goal_id:permit.goal.personaGoalId||null,interrupted_goal_id:null}:current;
+ };
  function permitFor(operation,p,cells){
   const permit=permits.getStore();
   if(!permit||!permit.active||permit.bot!==bot||permit.operation!==operation||permit.cell!==key(p)||!validGoal(permit.goal))return null;
@@ -61,6 +116,7 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
   try{
    if(operation==='place'&&packet.hand===1)throw refuse(operation,p);
    const cells=mutationCells(bot,operation,p),permit=permitFor(operation,p,cells);
+   if(scope)scope.attribution=attribution(permit);
    if(scope?.permit&&!permit||cells.some(protectedAt)&&!permit&&!suffocationEscape(operation,p))error=refuse(operation,p);
    if(!error&&permit&&operation==='dig'){
     const restore=cells.filter(cell=>!require('./designer').canClearSchematicBlock(permit.goal.blueprint,permit.goal.buildOwned,bot.blockAt(cell)));
@@ -73,7 +129,7 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
    }
   }catch(err){error=err;}
   if(error){
-   audit({operation,position:{x:p.x,y:p.y,z:p.z},status:'dispatch_refused',reason:'registered_structure_or_expired_permit'});
+   audit({operation,position:{x:p.x,y:p.y,z:p.z},status:'dispatch_refused',reason:'registered_structure_or_expired_permit',...(scope?.attribution||attribution(null))});
    if(scope)scope.error=error;
    if(operation==='dig'&&packet.status===2){bot.stopDigging?.();return false;}
    throw error;
@@ -93,17 +149,17 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
    if(!p)return original.apply(this,args);
    if(operation==='place'&&args[2]?.offhand)throw refuse(operation,p);
    const cells=mutationCells(bot,operation,p),protectedCell=cells.some(protectedAt),permit=permitFor(operation,p,cells),emergency=protectedCell&&!permit&&suffocationEscape(operation,p);
-   if(protectedCell&&!permit&&!emergency){audit({operation,position:{x:p.x,y:p.y,z:p.z},status:'refused',reason:'registered_structure',goal_id:bot._goal?.personaGoalId||null});throw refuse(operation,p);}
+   if(protectedCell&&!permit&&!emergency){audit({operation,position:{x:p.x,y:p.y,z:p.z},status:'refused',reason:'registered_structure',...attribution(null)});throw refuse(operation,p);}
    const before=bot.blockAt(p);let acknowledgedState=null,placed=false;
    const ack=packet=>{if(packet.location&&key(packet.location)===key(p))acknowledgedState=packet.type;};
    const placement=(_old,block)=>{if(block?.position&&key(block.position)===key(p)){placed=true;acknowledgedState=block.stateId;}};
    bot._client?.on('block_change',ack);bot.on?.('blockPlaced',placement);
-   let succeeded=false;const dispatch={bot,p,operation,permit,error:null};
+   let succeeded=false;const dispatch={bot,p,operation,permit,error:null,attribution:attribution(permit)};
    try{const result=await dispatches.run(dispatch,()=>original.apply(this,args));if(dispatch.error)throw dispatch.error;succeeded=true;return result;}catch(err){throw dispatch.error||err;}
    finally{
     bot._client?.removeListener('block_change',ack);bot.removeListener?.('blockPlaced',placement);
     const after=bot.blockAt(p);
-    audit({operation,position:{x:p.x,y:p.y,z:p.z},status:succeeded?'returned':'failed',requested_by_bot:true,registered:protectedCell,permission:permit?'validated_build_cell':emergency?'body_intersection_escape':'unregistered_cell',goal_id:permit?.goal.personaGoalId||bot._goal?.personaGoalId||null,build_id:permit?.goal.buildId||null,before:{name:before?.name,state_id:before?.stateId},after:{name:after?.name,state_id:after?.stateId},server_update_observed:acknowledgedState!==null,server_state_id:acknowledgedState,own_placement_event:placed,observed_change:acknowledgedState!==null&&acknowledgedState!==before?.stateId});
+    audit({operation,position:{x:p.x,y:p.y,z:p.z},status:succeeded?'returned':'failed',requested_by_bot:true,registered:protectedCell,permission:permit?'validated_build_cell':emergency?'body_intersection_escape':'unregistered_cell',...dispatch.attribution,build_id:permit?.goal.buildId||null,before:{name:before?.name,state_id:before?.stateId},after:{name:after?.name,state_id:after?.stateId},server_update_observed:acknowledgedState!==null,server_state_id:acknowledgedState,own_placement_event:placed,observed_change:acknowledgedState!==null&&acknowledgedState!==before?.stateId});
    }
   };
  }
@@ -119,4 +175,4 @@ function routeMutatesStructure(bot,move){
  const protectedAt=bot._registeredStructureProtection;if(!protectedAt)return false;
  return (move.toBreak||[]).some(p=>{try{return mutationCells(bot,'dig',new Vec3(p.x,p.y,p.z)).some(protectedAt);}catch{return true;}})||(move.toPlace||[]).some(p=>protectedAt(new Vec3(p.x+(p.dx||0),p.y+(p.dy||0),p.z+(p.dz||0))));
 }
-module.exports={installStructureMutationGuard,withBuildMutation,routeMutatesStructure,mutationCells};
+module.exports={installStructureMutationGuard,withBuildMutation,withMutationExpectation,routeMutatesStructure,mutationCells};

@@ -208,7 +208,7 @@ async function ringAround(bot, task, feet, dy, blocks = SCAFFOLD, { maxMs = 2500
   }
   return laid;
 }
-async function pillarUp(bot, task, targetY, { dig, maxBlocks = 40, threats = true, canDig = diggableAbove, blocks = SCAFFOLD, wet = false, enclose = false, encloseUntil = Infinity, encloseFrom = -Infinity, skipSide = null } = {}) {
+async function pillarUp(bot, task, targetY, { dig, maxBlocks = 40, threats = true, canDig = diggableAbove, blocks = SCAFFOLD, wet = false, enclose = false, encloseUntil = Infinity, encloseFrom = -Infinity, skipSide = null, opportunisticMining = true, allowDetours = true } = {}) {
   const { move } = require('./motion');
   let placed = 0, lastPlaceError = null, lastJump = '';
   let rested = false;
@@ -222,7 +222,7 @@ async function pillarUp(bot, task, targetY, { dig, maxBlocks = 40, threats = tru
     // 80 cobblestone carried and no word of why.
     // Out of the water to a dry cell beside first (note 1804): a jump from water reaches 0.8 and the climb stops before its first block, the body standing in the breath. 25588's dragon-123, 136, 137 and 169 (2026-10-14 to 17) each ended 'stopped before the first block: water at the feet ... a jump from water reaches 0.8', 'up out of the breath first: 0 blocks up', dead in the cloud within seconds. Once a climb; the dry cell with a block under it beside the feet, none over the void.
     // The water at the feet taken up into an empty bucket first (note 1904): the dry cell beside is often none in a pool's trench, and 25588's dragon-281 (2026-10-19 10:5xZ) and dragon-258 were refused the climb at the pool's edge six and thirty-two times, 'water at the feet'. The source within two of the feet goes back into the bucket and the flow drains before the climb.
-    if (!rested && /water/.test(bot.blockAt(feet)?.name || '') && bot.inventory.items().some(i => i.name === 'bucket')) {
+    if (allowDetours && !rested && /water/.test(bot.blockAt(feet)?.name || '') && bot.inventory.items().some(i => i.name === 'bucket')) {
       try {
         const { sourceWater, fillWaterBucket } = require('./water');
     // The source within the bucket's reach, not within two (note 2208): the pool poured three cells from the column's foot ran into it, and dragon-318 (25589, 2026-10-26 12:05 to 12:19Z) was refused the climb eight times, 'water at the feet', no source within two and no dry cell beside in the trench, stood at the foot fifteen minutes and died in the breath; dragon-301 nine refusals, 312 seven.
@@ -245,7 +245,7 @@ async function pillarUp(bot, task, targetY, { dig, maxBlocks = 40, threats = tru
         else if (!src.length) console.log(`[pillar up] water at the feet at ${feet}: no source within the bucket's reach`);
       } catch (err) { if (['Cancelled', 'Blocked', 'NeedsAir'].includes(err.name)) throw err; console.log(`[pillar up] water at the feet: the scoop failed: ${String(err.message || err).slice(0, 120)}`); }
     }
-    if (!rested && /water/.test(bot.blockAt(feet)?.name || '')) {
+    if (allowDetours && !rested && /water/.test(bot.blockAt(feet)?.name || '')) {
       const dry = directions.map(d => feet.plus(d)).find(c => { const b = bot.blockAt(c), u = bot.blockAt(c.offset(0, -1, 0)), o = bot.blockAt(c.offset(0, 1, 0)); return b && /^(air|cave_air)$/.test(b.name) && o && /^(air|cave_air)$/.test(o.name) && u?.boundingBox === 'block' && !/water|lava/.test(u.name); });
       if (dry) { rested = true; console.log(`[pillar up] water at the feet at ${feet}: the dry cell beside at ${dry} taken before the climb`); try { await require('./bridging').creepTo(bot, task, dry, 1500); } catch (err) { if (['Cancelled', 'Blocked', 'NeedsAir'].includes(err.name)) throw err; } continue; }
     }
@@ -286,7 +286,7 @@ async function pillarUp(bot, task, targetY, { dig, maxBlocks = 40, threats = tru
     // iron, crystal 11 broken) stood on its column at (-13, -44) with its
     // middle over (-12, -45), 'air under the feet' fifteen times, and the
     // breath took it there.
-    if ((!below || below.boundingBox !== 'block') && !rested) {
+    if (allowDetours && (!below || below.boundingBox !== 'block') && !rested) {
       const rest = require('./terrain').restingCell(bot);
       if (rest && !rest.equals(feet)) { rested = true; await require('./bridging').creepTo(bot, task, rest, 1500); continue; }
     }
@@ -302,7 +302,9 @@ async function pillarUp(bot, task, targetY, { dig, maxBlocks = 40, threats = tru
       if (bot.heldItem?.name !== block.name) { const again = bot.inventory.items().find(i => i.name === block.name); if (again) await bot.equip(again, 'hand'); }
       let ref = below;
       const now = bot.entity.position.floored();
+      task.check();
       if (now.x !== feet.x || now.z !== feet.z) {
+        if (!allowDetours) throw Object.assign(new Error('The body left the pillar column'), { name: 'Blocked' });
         const under = bot.blockAt(now.offset(0, -1, 0));
         if (!under || under.boundingBox !== 'block') throw new Error(`the body over (${now.x}, ${now.z}) with ${under ? under.name : 'nothing'} under it, not over its cell`);
         ref = under;
@@ -335,7 +337,7 @@ async function pillarUp(bot, task, targetY, { dig, maxBlocks = 40, threats = tru
       await new Promise(resolve => setTimeout(resolve, 60 + attempt * 60));
       // The column's base kept with the record (note 1610): the lowest block laid, so that its own end stone above it is told from the island's without reading the sides.
       lastJump = `the jump reached ${Math.round((peak - start) * 100) / 100} over the start, the body at ${Math.round((bot.entity.position.y - start) * 100) / 100} at the place`;
-      try { lastPlaceError = null; await place(); placed++; try { await require('./opportunistic-mining').mineWithinReach(bot, task); } catch (e2) { if (['Cancelled', 'NeedsAir', 'NeedsSafety'].includes(e2.name)) throw e2; } const prev = bot._pillarUp; bot._pillarUp = { x: feet.x, z: feet.z, until: Date.now() + 600000, base: prev && prev.x === feet.x && prev.z === feet.z && prev.base != null && prev.until > Date.now() ? Math.min(prev.base, feet.y) : feet.y }; }
+      try { lastPlaceError = null; await place(); placed++; try { if (opportunisticMining) await require('./opportunistic-mining').mineWithinReach(bot, task); } catch (e2) { if (['Cancelled', 'NeedsAir', 'NeedsSafety'].includes(e2.name)) throw e2; } const prev = bot._pillarUp; bot._pillarUp = { x: feet.x, z: feet.z, until: Date.now() + 600000, base: prev && prev.x === feet.x && prev.z === feet.z && prev.base != null && prev.until > Date.now() ? Math.min(prev.base, feet.y) : feet.y }; }
       catch (err) { task.check(); lastPlaceError = String(err.message || err).slice(0, 80); }
       for (let i = 0; i < 20 && !bot.entity.onGround; i++) { task.check(); await new Promise(resolve => setTimeout(resolve, 25)); }
       if (bot.entity.position.floored().y > start) break;

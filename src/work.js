@@ -14,7 +14,9 @@ const { deliver } = require('./delivery');
 const { reservedForConstruction, portalSiteClear, selectPortalSite, portalSiteDig, portalSupports } = require('./build-sites');
 const { updateDigCapabilities } = require('./movement');
 const { resourceTunnelStep, tunnelStep, staircaseResting, safeExcavation } = require('./tunneling');
-const { maintainVitals, checkAir, needsAir, chooseFood, digWithAirGuard, safeFood } = require('./vitals');
+const { maintainVitals: maintainVitalsUnscoped, checkAir, needsAir, chooseFood, digWithAirGuard, safeFood } = require('./vitals');
+const {withActionScope}=require('./action-scope');
+const maintainVitals=(bot,task,report,options={})=>withActionScope(bot,'vitals',options.goal,()=>maintainVitalsUnscoped(bot,task,report,options));
 const { decide, question } = require('./decisions');
 const { Survival, inWater, lavaExit, shelterNeeded, mobSourceAbout } = require('./survival');
 const { checkThreats, safeFromHostiles, immediateThreat } = require('./danger');
@@ -10480,7 +10482,7 @@ async function liveTurn(bot, task, goal, activeWork, survival, saveWork, { clien
       const ate = await maintainVitals(bot, task, report, { client, goal, save, claimed });
       return !!ate || vitalsActed;
     },
-    hunt: () => huntObserved(bot, task, activeWork, saveWork, { navigate, dig }, client),
+    hunt: () => withActionScope(bot,'hunt',goal,()=>huntObserved(bot, task, activeWork, saveWork, { navigate, dig }, client)),
     work: async () => true,
   };
   // A claim that throws is said once and counts as none: survival's step

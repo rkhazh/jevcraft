@@ -77,3 +77,50 @@ test('offhand placement is refused rather than guessing the main-hand footprint'
  const {bot,p}=fixture();bot.heldItem={name:'stone'};
  await assert.rejects(bot._placeBlockWithOptions(bot.blockAt(p.offset(0,-2,0)),new Vec3(0,1,0),{offhand:true}),/Registered structure/);
 });
+
+test('completed chest then move cannot attribute later unscoped terrain work to the cached chest goal',async()=>{
+ const {bot,events}=fixture();
+ // 205400 replay: craft wrote _goal, move returned before updating it, and
+ // idle survival dug natural terrain with that completed craft id cached.
+ bot._goal={kind:'craft',personaGoalId:'completed-chest',status:'complete'};
+ bot._turn={holder:'survival',phase:'step',since:Date.now()};
+ await bot.dig(bot.blockAt(new Vec3(100,64,100)));
+ assert.equal(events.at(-1).goal_id,null);
+ assert.equal(events.at(-1).controller,'unknown');
+ assert.equal(bot._goal.personaGoalId,'completed-chest','native cached goal is preserved');
+});
+
+test('survival mutation reports its executing controller separately from interrupted persona intent',async()=>{
+ const {withActionScope}=require('../src/action-scope'),{bot,events,goal}=fixture();bot._goal=goal;
+ await withActionScope(bot,'work',goal,async()=>{
+  await withActionScope(bot,'survival',goal,()=>bot.dig(bot.blockAt(new Vec3(100,64,100))));
+  assert.equal(events.at(-1).controller,'survival');assert.equal(events.at(-1).goal_id,null);assert.equal(events.at(-1).interrupted_goal_id,'goal');
+  await bot.dig(bot.blockAt(new Vec3(101,64,100)));
+  assert.equal(events.at(-1).controller,'work');assert.equal(events.at(-1).goal_id,'goal');assert.equal(events.at(-1).interrupted_goal_id,null);
+ });
+});
+
+test('closed action scopes and other bots cannot lend their task identity to later callbacks',async()=>{
+ const {withActionScope}=require('../src/action-scope'),{bot,events,goal}=fixture();let detached,release;
+ await withActionScope(bot,'work',goal,async()=>{
+  detached=new Promise(r=>{release=r}).then(()=>bot.dig(bot.blockAt(new Vec3(100,64,100))));
+ });
+ await withActionScope(bot,'work',{personaGoalId:'new-goal'},async()=>{release();await detached;});
+ assert.equal(events.at(-1).goal_id,null);assert.equal(events.at(-1).controller,'unknown');
+ await withActionScope({},'work',goal,()=>bot.dig(bot.blockAt(new Vec3(101,64,100))));
+ assert.equal(events.at(-1).goal_id,null);
+});
+
+test('actual dispatch keeps its async owner across aiming and drops a finished detached owner',async()=>{
+ const {withActionScope}=require('../src/action-scope'),bot=new EventEmitter(),events=[],packets=[],p=new Vec3(10,64,10);
+ bot._client=new EventEmitter();bot._client.write=(...args)=>packets.push(args);bot.game={dimension:'overworld'};bot.entity={position:new Vec3(0,64,0)};
+ bot.blockAt=q=>({position:q,name:'stone',stateId:1});let release;
+ bot.dig=async block=>{await new Promise(r=>{release=r});bot._client.write('block_dig',{status:0,location:block.position});};
+ installStructureMutationGuard(bot,{record:e=>events.push(e)});
+ const goal={personaGoalId:'original'},other={personaGoalId:'new'},pending=withActionScope(bot,'work',goal,()=>bot.dig(bot.blockAt(p)));
+ await withActionScope(bot,'survival',other,async()=>{bot._goal=other;release();await pending;});
+ assert.equal(events.at(-1).controller,'work');assert.equal(events.at(-1).goal_id,'original');
+ let detached;await withActionScope(bot,'work',goal,async()=>{detached=bot.dig(bot.blockAt(p));});
+ await withActionScope(bot,'work',other,async()=>{release();await detached;});
+ assert.equal(events.at(-1).controller,'unknown');assert.equal(events.at(-1).goal_id,null);assert.equal(packets.length,2);
+});

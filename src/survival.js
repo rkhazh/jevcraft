@@ -9055,6 +9055,7 @@ class Survival {
   // there is none (the decision audit, 2026-09-25).
   shaftColumn({ radius = 4 } = {}) {
     const bot = this.bot;
+    if (require('./shaft-retreat').descentBlocked(bot, this.state)) return { none: 'The escape shaft already used this encounter has a recorded return route; another descent would deepen it', resting: true, spot: `${feetCell(bot).x},${feetCell(bot).z}` };
     // No pickaxe (respawned with nothing, at night, beside the mobs that
     // killed it: the clean run died there a second time gathering dirt for
     // a shelter): the shaft still goes down where every block in it digs by
@@ -9107,6 +9108,7 @@ class Survival {
 
   async digShaft(task, goal, save, { start, bottom, spot, here, stance = false }) {
     const bot = this.bot;
+    if (require('./shaft-retreat').descentBlocked(bot, this.state)) return false;
     if (!start.equals(here)) {
       try { await this.actions.navigate(bot, task, new goals.GoalBlock(start.x, start.y, start.z), { timeoutMs: 8000, stallMs: 3000 }); }
       catch (err) { task.check(); if (['NeedsAir', 'NeedsSafety', 'Cancelled'].includes(err.name)) throw err; }
@@ -9156,6 +9158,9 @@ class Survival {
       return onColumn();
     };
     const offColumn = () => { this.state.stanceWhy = 'knocked off the shaft\'s column and could not step back over it'; setAside(this, 'shaft_pocket', spot, this.state.stanceWhy, 30000); save(); return false; };
+    if (!require('./shaft-retreat').begin(bot, this.state, start, bottom)) return false;
+    save(); // Persist the original entry and spent excavation before the first dig.
+    try {
     this.report(goal, save, { action: 'shaft_pocket', from: { ...start }, to: { ...bottom } });
     for (let y = start.y - 1; y >= bottom.y; y--) {
       task.check(); checkAir(bot);
@@ -9179,10 +9184,16 @@ class Survival {
       catch (err) { task.check(); if (['NeedsAir', 'NeedsSafety', 'Cancelled'].includes(err.name)) throw err; }
     }
     if (!shelter.solid(bot.blockAt(roof))) { setAside(this, 'shaft_pocket', spot, 'the cap would not go on', 600000); return false; }
+    if (!require('./shaft-retreat').noteCap(bot, this.state, roof, goal)) return false;
     const refuge = { origin: { ...bottom }, dimension: bot.game.dimension, createdAt: new Date().toISOString(), emergency: true, shaft: true, top: { ...start } };
     if (shelter.inside(bot, refuge) && shelter.sealed(bot, refuge)) refuge.verifiedAt = new Date().toISOString();
     this.state.shelters.push(refuge); save();
     return true;
+    } finally {
+      const retreat = require('./shaft-retreat').current(bot, this.state);
+      if (retreat?.phase === 'descending') retreat.phase = 'returning';
+      save();
+    }
   }
 
   // The ladder's next item, when it can be made from the pockets by smelting
@@ -10092,6 +10103,10 @@ class Survival {
   // leave is said to cost (way-out.js, note 679).
   leaveExit(refuge, { past = false } = {}) {
     const bot = this.bot;
+    if (refuge.shaft) {
+      const cap = shaftCap(bot, refuge);
+      return { exit: { door: cap, outside: null, up: true }, pocket: [], cap, near: threats(bot, 8) };
+    }
     const near = threats(bot).filter(t => (t.visible || t.distance < 6) && !claimed(bot, t.entity));
     // Past them, but never out beside a creeper: mid-72-g, chosen to leave
     // with one three blocks off behind the wall, opened the pocket on it
@@ -10118,6 +10133,7 @@ class Survival {
 
   async leave(task, goal, save, refuge, reason, { past = false } = {}) {
     const bot = this.bot;
+    if (refuge.shaft) return this.returnFromShaft(task, goal, save);
     // "Morning. Back to it." only when it is morning; a shelter left at
     // night for the bed, or with mobs outwaited, says so.
     reason ||= shelterNeeded(bot) ? 'Moving on.' : undefined;
@@ -10223,6 +10239,13 @@ class Survival {
     }
     if (exit.outside) await this.actions.navigate(bot, task, new goals.GoalBlock(exit.outside.x, exit.outside.y, exit.outside.z), { timeoutMs: 10000 });
     return true;
+  }
+
+  async returnFromShaft(task, goal, save) {
+    return require('./shaft-retreat').returnStep(this.bot, task, this.state, goal, save, {
+      dig: this.actions.dig, pillar: this.actions.pillar,
+      report: action => this.report(goal, save, action),
+    });
   }
 
   // One Jev decision over a tree the code built: the question is defined in
@@ -11045,7 +11068,13 @@ class Survival {
   // sand island, five times (2026-09-24), as trial 9's shelter search before
   // it. Air, danger, cancellation and stalls go on up as always.
   async step(task, goal, save, onStep = () => {}) {
+    return require('./action-scope').withActionScope(this.bot, 'survival', goal, () => this.stepScoped(task, goal, save, onStep));
+  }
+
+  async stepScoped(task, goal, save, onStep = () => {}) {
     try {
+      if (require('./shaft-retreat').resume(this.bot, this.state)) save();
+      if (require('./shaft-retreat').endQuietEncounter(this.bot, this.state)) save();
       delete this._creeperRefused;
       // Armour carried and not worn goes on before anything else here, when
       // what is carried of it has changed (note 1213): the ladder's step put
@@ -11588,6 +11617,9 @@ class Survival {
     // or in reach of the sword, is the fight-or-flee rules' before anything.
     const atArm = threats(bot).filter(t => t.distance <= 3 && !shooter(t.entity) && (t.visible || canStrike(bot, t.entity)) && !nightHunted(bot, t.entity));
     if (atArm.length && !claimed(bot, atArm[0].entity)) { await this.flee(task, goal, save); onStep(goal); return true; }
+    if (require('./shaft-retreat').current(bot, this.state)?.phase === 'returning' && !require('./shaft-retreat').urgent(bot)) {
+      await this.returnFromShaft(task, goal, save); onStep(goal); return true;
+    }
     const refuge = this.currentShelter();
     // Or shut to walkers with only lava or water left open in its shell,
     // which no block goes into: the pocket as far as it closes (note 697).
@@ -13679,6 +13711,9 @@ function claim(bot, goal = {}, survival = null) {
   // within two.
   const atArm = require('./danger').atReach(bot, threats(bot, 8));
   if (atArm.length) return make('escape_threat', 'pressing', { atArm: atArm.slice(0, 3).map(t => ({ ...mob(t), ...(t.entity.heldItem?.name ? { held: t.entity.heldItem.name } : {}), canReach: 'at its reach of the bot now' })), ...edgeFact, ...pocket });
+  const shaftReturn = require('./shaft-retreat').current(bot, state);
+  if (['returning', 'descending'].includes(shaftReturn?.phase) && !require('./shaft-retreat').urgent(bot))
+    return make('return_from_shaft', 'pressing', { returnTo: shaftReturn.entry, remainingHeight: Math.max(0, shaftReturn.entry.y - bot.entity.position.y), ...(shaftReturn.failure ? { blocked: shaftReturn.failure } : {}) });
   // The work's turns stopped at once by its own threat check, again and again, with nothing claimed for the mob that
   // stops them (note 2313): the mob is survival's, and Jev is asked how to answer it. full-11 (25588, 2026-10-27
   // 19:15Z), climbing out at y -3, was given the work alone six times in a second, each stopped at 'Threat nearby:
@@ -13902,4 +13937,4 @@ function claim(bot, goal = {}, survival = null) {
   return made;
 }
 
-module.exports = { bedSiteNear, runCellsAside, runLavaSays, blazeStanceSays, mobsMetHereSays, shooterCover, dropBesideSays, STANDING_WAYS, runGroundOf, bedAfterSleepTree, sealedWaitCostSays, bedLoopOf, caveBedSaysFor, wardenBoom, LEAVES_THE_BOOM, PUSH_RECORD, pushRecordOn, blockRecord, BLOCK_RECORD, bedClimbable, BED_CLIMB, pricedRunCell, runFromRecord, RUN_FROM_RECORD, spawnBedNear, homeBedReach, fleeFrom, furnaceFood, runFromCreeper, deadlyEdgeWalk, sprintByHeading, nightEnds, sealThreatNear, scoutBudget, SCOUT_MS, SCOUT_FAR_MS, mealSays, nightMinePickSays, bedSafetyAt, healWaitSays, WAITS_IN, wearGoldOf, piglinGoldClause, blowsLead, pastFollowOf, sealedWaitSaysFor: (bot, opts) => sealedWaitSays(bot, opts), lavaExitCost, nookSaysFor: (bot, nook, opts) => nookSays(bot, nook, opts), nightMineHolds, NIGHT_MINE_IDLE_MS, underRock, sleepRefusalSays, shellUnfinishedSays, spawnerMob, routeOf, shotsDue, shotChanceNow, routeEdge, pushCarries, pushFooting, blastPushesOver, blastOverSays, pushAtSays, shotPushers, BLAST_THROW, wallCells, wallStock, searchBudget, lavaTop, lavaFill, swimReach, pocketPlan, pocketRestsOf, pocketBiters, farBiters, piglinGoldSays, claim, chaseSays, chaseCost, groundBeside, onPillarTop, eatApple, LAVA_BLOCKS_A_SECOND, effectsSay, spawnerAbout, unseenBiters, fartherShootersSay, mobSourceAbout, shieldFacing, biterAtArm, pickaxeReserve, chargeSays, creeperSays, costSays, openCells, eatSays, mealHelps, EAT_AFTER, PILLAR_SECONDS, BLOCK_SECONDS, EAT_SECONDS, CLIMBERS, MOVING_STANCES, chargeStopsAt, usesToClimbOut, SLEEP_DEBT_TICKS, Survival, inLava, inWater, lavaExit, besideDrop, firmGround, night, shelterNeeded, lavaBeside, bedSite, bedNook, monstersByBed, monstersAtBed, refusalSays, nearbyHomeBed, observedBed, sleepable, SLEEP_FROM, keepShieldForStance, SHIELD_STANCES, ORE_YIELD, nightMineOn };
+module.exports = { BOOM_ACROSS, BOOM_UP, bedSiteNear, runCellsAside, runLavaSays, blazeStanceSays, mobsMetHereSays, shooterCover, dropBesideSays, STANDING_WAYS, runGroundOf, bedAfterSleepTree, sealedWaitCostSays, bedLoopOf, caveBedSaysFor, wardenBoom, LEAVES_THE_BOOM, PUSH_RECORD, pushRecordOn, blockRecord, BLOCK_RECORD, bedClimbable, BED_CLIMB, pricedRunCell, runFromRecord, RUN_FROM_RECORD, spawnBedNear, homeBedReach, fleeFrom, furnaceFood, runFromCreeper, deadlyEdgeWalk, sprintByHeading, nightEnds, sealThreatNear, scoutBudget, SCOUT_MS, SCOUT_FAR_MS, mealSays, nightMinePickSays, bedSafetyAt, healWaitSays, WAITS_IN, wearGoldOf, piglinGoldClause, blowsLead, pastFollowOf, sealedWaitSaysFor: (bot, opts) => sealedWaitSays(bot, opts), lavaExitCost, nookSaysFor: (bot, nook, opts) => nookSays(bot, nook, opts), nightMineHolds, NIGHT_MINE_IDLE_MS, underRock, sleepRefusalSays, shellUnfinishedSays, spawnerMob, routeOf, shotsDue, shotChanceNow, routeEdge, pushCarries, pushFooting, blastPushesOver, blastOverSays, pushAtSays, shotPushers, BLAST_THROW, wallCells, wallStock, searchBudget, lavaTop, lavaFill, swimReach, pocketPlan, pocketRestsOf, pocketBiters, farBiters, piglinGoldSays, claim, chaseSays, chaseCost, groundBeside, onPillarTop, eatApple, LAVA_BLOCKS_A_SECOND, effectsSay, spawnerAbout, unseenBiters, fartherShootersSay, mobSourceAbout, shieldFacing, biterAtArm, pickaxeReserve, chargeSays, creeperSays, costSays, openCells, eatSays, mealHelps, EAT_AFTER, PILLAR_SECONDS, BLOCK_SECONDS, EAT_SECONDS, CLIMBERS, MOVING_STANCES, chargeStopsAt, usesToClimbOut, SLEEP_DEBT_TICKS, Survival, inLava, inWater, lavaExit, besideDrop, firmGround, night, shelterNeeded, lavaBeside, bedSite, bedNook, monstersByBed, monstersAtBed, refusalSays, nearbyHomeBed, observedBed, sleepable, SLEEP_FROM, keepShieldForStance, SHIELD_STANCES, ORE_YIELD, nightMineOn };
