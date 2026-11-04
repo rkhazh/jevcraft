@@ -239,6 +239,13 @@ function ownInstructions(spec, dimension) {
   if (!extra) return rest;
   return { ...rest, guidance: `${rest.guidance || ''}${rest.guidance ? ' ' : ''}${extra}` };
 }
+// Checked when a question is built: community sets persona mode after imports.
+function personaObjectiveGuidance(text) {
+  if (process.env.JEV_PERSONA_MODE !== '1') return text;
+  return text.replace(DEATH_TIME, 'Pursue the supplied active persona goal. Weigh survival, health, carried resources, and the cost of interrupting and recovering the current work.')
+    .replace('The goal is the fastest dragon kill: weigh the ore an hour against the digging and the climb.', 'Support the supplied active persona goal: weigh needed ore, health, carried resources, digging, climbing, and interrupted work.')
+    .replace('The goal is the fastest dragon kill: a climb for food later costs its minutes; a hunt now costs these.', 'Support the supplied active persona goal: weigh food and health needs, carried resources, and interruption of the current work against hunting or climbing later.');
+}
 function withRealTime(spec, state = {}, dimension = state?.dimension) {
   const own = ownInstructions(spec, dimension);
   if (!GAMEPLAY_AREAS.has(spec.area) || !own) return own;
@@ -249,7 +256,7 @@ function withRealTime(spec, state = {}, dimension = state?.dimension) {
   const deaths = (state?.recentDeaths ? ` ${DEATHS}` : '') + (state?.sameAnswerAgain || state?.lastAnswersCameToNothing || state?.answersThatCameToNothing ? ` ${AGAIN}` : '') + (state?.waysResting || state?.whatFailedBelow ? ` ${LEDGER}` : '') + (state?.leastBadLast ? ` ${LEAST_BAD}` : '') + (state?.failedAtOnce ? ` ${AT_ONCE}` : '') + (state?.lastHit ? ` ${LAST_HIT}` : '') + (state?.answerChangedNothing ? ` ${CHANGED_NOTHING}${/recorded as failed/.test(state.answerChangedNothing) ? ` ${RECORDED_FAILED}` : ''}` : '') + (state?.alreadySo ? ` ${ALREADY_SO}` : '') + (state?.spellSoFar ? ` ${SPELL}` : '') + (state?.asideHolds ? ` ${ASIDE_HOLDS}` : '') + (state?.toTheBlazes ? ` ${TO_THE_BLAZES}` : '') + (state?.answersHold || state?.lastCommitment ? ` ${HOLDS}` : '');
   const clock = (state?.runClock ? ` ${CLOCK}` : '') + (state?.sculk ? ` ${SCULK}` : '') + (state?.healing ? ` ${HEALING}` : '') + (state?.healing?.withoutFood ? ` ${WITHOUT_FOOD}` : '') + (state?.blockStock ? ` ${STOCK}` : '') + (state?.rodsAtRisk ? ` ${RODS_AT_RISK}` : '') + (state?.shieldWear ? ` ${SHIELD_WEAR}` : '') + (state?.slot ? ` ${SLOT}` : '');
   const dark = off && normDimension(dimension) === 'the_nether' && (state?.darkHere !== undefined || /\bdark\b/.test(guidance)) ? ` ${NETHER_DARK}` : '';
-  return { ...own, task, guidance: `${guidance}${guidance ? ' ' : ''}${off ? elsewhereTime(placeName(dimension)) : REAL_TIME}${dark}${clock}${risk}${trail}${deaths}` };
+  return { ...own, task, guidance: personaObjectiveGuidance(`${guidance}${guidance ? ' ' : ''}${off ? elsewhereTime(placeName(dimension)) : REAL_TIME}${dark}${clock}${risk}${trail}${deaths}`) };
 }
 // The state as it goes out off the Overworld: the day's fields left out at
 // any depth (a clock that means nothing there), and where the bot is said.
