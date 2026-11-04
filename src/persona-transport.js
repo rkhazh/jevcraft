@@ -35,13 +35,22 @@ async function startPersonaTransport({getSession,token,port=8766}){
     return reply(status==='pending'?202:status==='rate_limited'?429:status==='stale_session'?409:503,status==='pending'?{status}:{error:status});
    }
    if(req.method==='GET'&&url.pathname==='/voice/session'){const voice=getSession()?.voiceSession?.();return voice?reply(200,voice):reply(503,{error:'voice_unavailable'});}
+   if(req.method==='GET'&&url.pathname==='/vision'){
+    if(req.headers['x-persona-session']!==api.sessionId)return reply(409,{error:'stale_session'});
+    try{const frame=await getSession().captureVision();if(frame.session_id!==api.sessionId||getSession()?.persona?.sessionId!==api.sessionId)return reply(409,{error:'stale_session'});return reply(200,frame);}catch(err){return reply(err.code==='vision_rate_limited'?429:503,{error:err.code||'vision_unavailable'});}
+   }
    if(req.method==='GET'&&url.pathname==='/snapshot')return reply(200,api.snapshot());
    if(req.method==='GET'&&url.pathname==='/events'){
     const after=Number(url.searchParams.get('after')||0);if(!Number.isSafeInteger(after)||after<0)return reply(400,{error:'invalid_cursor'});return reply(200,api.events(after));
    }
-   if(req.method!=='POST'||!['/goal','/cancel','/chat','/voice/state'].includes(url.pathname))return reply(404,{error:'not_found'});
+   if(req.method!=='POST'||!['/goal','/cancel','/chat','/voice/state','/look'].includes(url.pathname))return reply(404,{error:'not_found'});
    let size=0, chunks=[];for await(const chunk of req){size+=chunk.length;if(size>32768){reply(413,{error:'payload_too_large'});req.resume();return;}chunks.push(chunk);}
    const data=parseStrict(Buffer.concat(chunks).toString('utf8'));
+   if(url.pathname==='/look'){
+    if(req.headers['x-persona-session']!==api.sessionId)return reply(409,{error:'stale_session'});
+    if(!exact(data,['target']))return reply(400,{error:'invalid_look'});
+    try{return reply(200,await getSession().lookVision(data.target));}catch(err){return reply(err.code==='look_busy'?409:400,{error:err.code||'look_unavailable'});}
+   }
    if(url.pathname==='/voice/state'){
     const id=req.headers['x-persona-session'],generation=req.headers['x-voice-generation'];
     if(typeof id!=='string'||id!==api.sessionId)return reply(409,{error:'stale_session'});

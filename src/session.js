@@ -52,7 +52,7 @@ function unworkable(bot, spec) {
 function createSession(config, client, { stateDirectory = path.join(__dirname, '..', '.bot-state'), recorder,
   runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false } = {}) {
   const externalPersona = process.env.JEV_PERSONA_MODE === '1';
-  let persona = null;
+  let persona = null, vision = null;
   let ended = false, spawned = false, resolveClosed;
   const connectedAt = Date.now();
   const closed = new Promise(resolve => { resolveClosed = resolve; });
@@ -845,6 +845,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     persona = require('./persona-admission').createPersona({
       rendezvous, allowVisiblePlayers:personaVisiblePlayers, items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
+        vision_capabilities:vision?.capabilities()||{enabled:false,look:false},
         execution:require('./persona-execution').executionSnapshot(bot,active),
         build_capabilities:buildApi.capabilities(bot,buildEnabled),builds:buildApi.describeBuilds(bot),
         build_progress:active?.goal?.kind==='build'?{build_id:active.goal.buildId||null,phase:active.goal.buildPhase||active.goal.step?.action||'pending',placements_recorded:Object.keys(active.goal.buildOwned||{}).length,planned_blocks:active.goal.blueprint?.blocks?.length||null}:null,connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
@@ -874,6 +875,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
       },
     });
+    if(process.env.JEV_VISION_ENABLED==='1')vision=require('./persona-vision').installPersonaVision(bot,{sessionId:()=>persona.sessionId,worldId:process.env.MC_WORLD_ID||identity,ready:()=>ready&&!ended,activeGoalId:()=>active?.goal?.personaGoalId||null,safeToLook:()=>ready&&!ended&&(!active||active.idle)&&bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false&&!['survival','vitals'].includes(bot._turn?.holder)});
     require('./persona-chat').installPersonaChat(bot,{community:config.host==='mc.agicraft.ru'&&Number(config.port)===25565,ready:()=>ready&&!ended,emit:event=>persona.emit(event)});
     let lastSpeech=0;
     persona.chat = text=>{
@@ -882,7 +884,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       lastSpeech=Date.now();personaSpeech(text);
     };
   }
-  return { bot, persona, closed, setVoiceState(sessionId,generation,state){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||!voice)return 'voice_unavailable';return voice.setState(generation,state);}, refreshVoice(sessionId){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||bot.game?.gameMode!=='survival'||!voice)return 'voice_unavailable';return voice.refresh();}, voiceSession(){return ready&&!ended&&persona?voice?.read(persona.sessionId)??null:null;}, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
+  return { bot, persona, closed, captureVision:()=>vision?vision.capture():Promise.reject(Object.assign(new Error('vision_unavailable'),{code:'vision_unavailable'})),lookVision:target=>vision?vision.look(target):Promise.reject(Object.assign(new Error('vision_unavailable'),{code:'vision_unavailable'})), setVoiceState(sessionId,generation,state){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||!voice)return 'voice_unavailable';return voice.setState(generation,state);}, refreshVoice(sessionId){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||bot.game?.gameMode!=='survival'||!voice)return 'voice_unavailable';return voice.refresh();}, voiceSession(){return ready&&!ended&&persona?voice?.read(persona.sessionId)??null:null;}, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
 }
 
 module.exports = { unworkable, createSession };

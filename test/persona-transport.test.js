@@ -42,3 +42,13 @@ test('voice state validates exact booleans and fences session/generation before 
  const r=await fetch(url,{method:'POST',headers,body});assert.equal(r.status,200);assert.deepEqual(await r.json(),{status:'updated'});assert.equal(calls,1);
  }finally{await new Promise(r=>server.close(r))}
 });
+test('vision and look require bearer and current session; no external file or URL input',async()=>{
+ let captures=0,looks=0;const session={persona:{sessionId:'s'},captureVision:async()=>{captures++;return {session_id:'s',image_base64:'png'}},lookVision:async()=>{looks++;return {status:'looked'}}};
+ const server=await startPersonaTransport({port:0,token:'a'.repeat(40),getSession:()=>session}),url=`http://127.0.0.1:${server.address().port}`,headers={Authorization:'Bearer '+'a'.repeat(40),'X-Persona-Session':'s'};
+ try{
+  assert.equal((await fetch(url+'/vision')).status,401);assert.equal((await fetch(url+'/vision',{headers:{...headers,'X-Persona-Session':'old'}})).status,409);assert.equal(captures,0);
+  assert.equal((await fetch(url+'/vision',{headers})).status,200);assert.equal(captures,1);
+  assert.equal((await fetch(url+'/look',{method:'POST',headers,body:JSON.stringify({url:'file:///private'})})).status,400);assert.equal(looks,0);
+  assert.equal((await fetch(url+'/look',{method:'POST',headers,body:JSON.stringify({target:{x:1,y:64,z:2}})})).status,200);assert.equal(looks,1);
+ }finally{await new Promise(r=>server.close(r))}
+});
