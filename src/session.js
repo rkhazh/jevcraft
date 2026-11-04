@@ -235,6 +235,16 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   if (!externalPersona && !survivalStore.read() && store.read()?.status === 'cancelled') survival.state.paused = true;
   if (externalPersona) survival.state.paused = false;
   const saveSurvival = () => { if (!ended) { survival.state.version = 1; survivalStore.save(survival.state); } };
+  if(externalPersona){
+    const reports=require('./body-reports');
+    const record=(report,source,attribution)=>{
+      if(ended||!persona?.sessionId)return;
+      const entry=reports.record(bot,survival.state,report,{source,attribution,sessionId:persona.sessionId,worldId:process.env.MC_WORLD_ID||identity});
+      if(entry)saveSurvival();
+    };
+    survival.onReport=report=>record(report,'controller_report');
+    bot._onActionOutcome=({outcome,reason,...attribution})=>record({action:attribution.controller,outcome,reason},'scope_end',attribution);
+  }
   const saveGoal = goal => { if (!ended && (!goal.personaGoalId || persona?.valid(goal.personaGoalId))) { memory.recordGoal(goal, bot); world.harvest(goal); store.save(goal); } };
   const workStore = { save: goal => { saveGoal(goal); saveSurvival(); } };
   let active = null;
@@ -853,6 +863,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
         vision_capabilities:vision?.capabilities()||{enabled:false,look:false},
         execution:require('./persona-execution').executionSnapshot(bot,active),
+        body_reports:require('./body-reports').tail(survival.state,process.env.MC_WORLD_ID||identity),
         build_capabilities:buildApi.capabilities(bot,buildEnabled),builds:buildApi.describeBuilds(bot),
         build_progress:active?.goal?.kind==='build'?{build_id:active.goal.buildId||null,phase:active.goal.buildPhase||active.goal.step?.action||'pending',placements_recorded:Object.keys(active.goal.buildOwned||{}).length,planned_blocks:active.goal.blueprint?.blocks?.length||null}:null,connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
         dimension:bot.game?.dimension || 'unknown',version:bot.version || null,bot_uuid:bot.player?.uuid || null,

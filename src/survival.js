@@ -3383,7 +3383,10 @@ class Survival {
       const entry = (flip && attemptsFor(goal).of('flip')[key]) || attemptsFor(this).of('act')[key] || attemptsFor(goal).of('act')[key];
       throw Object.assign(new Error(`${action.action.replaceAll('_', ' ')} is set aside: ${entry?.why || 'it stalled'}`), { name: 'SetAside', until: entry?.until });
     }
-    goal.survivalAction = { ...action, at: new Date().toISOString() }; save();
+    goal.survivalAction = { ...action, at: new Date().toISOString() };
+    try { this.onReport?.(goal.survivalAction); }
+    catch (err) { console.error(`[persona] native report unavailable: ${err.name}`); }
+    save();
     this.bot._survivalReportedAt = Date.now(); this.bot._survivalGoal = goal;
     // An answer to the mobs about, as the hurt listener counts one: leaving
     // them be is not.

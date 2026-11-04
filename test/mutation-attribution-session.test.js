@@ -15,7 +15,8 @@ test('real session craft → move → idle survival records the actual controlle
  bot.blockAt=p=>{const name=blocks.get(p.toString())||(p.y<64?'stone':'air');return {position:p,name,stateId:name==='air'?0:1,shapes:name==='air'?[]:[[0,0,0,1,1,1]],boundingBox:name==='air'?'empty':'block'};};
  bot.dig=async block=>{await Promise.resolve();bot._client.write('block_dig',{status:0,location:block.position});blocks.set(block.position.toString(),'air');bot._client.emit('block_change',{location:block.position,type:0});};
  let idleDig=false,idleDone=false,preempt=false,lastWorkGoal;
- const survival={state:{},bot,step:Survival.prototype.step,stepScoped:async function(_task,goal){
+ const survival={state:{},bot,step:Survival.prototype.step,report:Survival.prototype.report,stepScoped:async function(_task,goal,save){
+  this.report(goal,save,{action:'native_probe',target:{x:preempt?12:11,y:64,z:0}});
   await bot.dig(bot.blockAt(new Vec3(preempt?12:11,64,0)));return true;
  }};
  const original=Module._load;
@@ -50,6 +51,16 @@ test('real session craft → move → idle survival records the actual controlle
   const idle=audit.find(e=>e.position.x===11);assert.equal(idle.controller,'survival');assert.equal(idle.goal_id,null);assert.equal(idle.interrupted_goal_id,null);
   preempt=true;const next=await submit({kind:'craft',item:'chest',count:1,deliver:false});
   const interrupted=audit.find(e=>e.position.x===12);assert.equal(interrupted.controller,'survival');assert.equal(interrupted.goal_id,null);assert.equal(interrupted.interrupted_goal_id,next);
+  const reports=session.persona.snapshot().body_reports.filter(r=>r.report.action==='native_probe');
+  assert.equal(reports.length,2);assert.equal(reports[0].goal_id,null);assert.equal(reports[0].interrupted_goal_id,null);
+  assert.equal(reports[1].controller,'survival');assert.equal(reports[1].goal_id,null);assert.equal(reports[1].interrupted_goal_id,next);
+  assert.equal(reports[1].source_session_id,session.persona.snapshot().session_id);
   assert.equal(packets.length,4);assert.equal(session.persona.snapshot().last_result.verified,true);
+  let release;
+  const late=require('../src/action-scope').withActionScope(bot,'survival',null,()=>new Promise(resolve=>{release=resolve;}));
+  session.shutdown();await session.closed;
+  const closedReports=session.persona.snapshot().body_reports;
+  bot.health=5;survival.onReport({action:'late_report'});release();await late;
+  assert.deepEqual(session.persona.snapshot().body_reports,closedReports);
  }finally{session?.shutdown();await session?.closed;Module._load=original;process.env=oldEnv;fs.rmSync(dir,{recursive:true,force:true});}
 });

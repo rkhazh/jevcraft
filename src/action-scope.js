@@ -9,7 +9,15 @@ async function withActionScope(bot,controller,goal,run){
  const scope={bot,controller,active:true,intent:null};
  if(controller==='work'&&goal?.personaGoalId)scope.intent={goal_id:goal.personaGoalId,owner:scope};
  else if(controller!=='idle')scope.intent=parent?.intent||(!parent&&goal?.personaGoalId?{goal_id:goal.personaGoalId,owner:scope}:null);
- try{return await actions.run(scope,run);}finally{scope.active=false;}
+ try{return await actions.run(scope,async()=>{
+  let outcome='yielded',reason=null;
+  try{return await run();}
+  catch(err){outcome=['NeedsAir','NeedsSafety','Cancelled'].includes(err?.name)?'interrupted':'failed';reason=String(err?.message||err);throw err;}
+  finally{
+   try{bot._onActionOutcome?.({...actionAttribution(bot),outcome,reason});}
+   catch(err){console.error(`[persona] action evidence unavailable: ${err.name}`);}
+  }
+ });}finally{scope.active=false;}
 }
 function actionAttribution(bot){
  const scope=actions.getStore();
