@@ -414,7 +414,8 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     const retained = externalPersona ? null : store.read();
     const standing = externalPersona ? null : dreamStore.read();
     if (standing?.dream && !launchingDream && shouldLaunchDream(standing, retained, { ready: readyForDream(), resting: isSetAside(survival, 'dream_launch', standing.dream) })) { launchDream(standing); return; }
-    const goal = { ...(idleStore.read() || {}), version: 1, kind: 'survive', request: 'Stay alive and prepare supplies between player requests',
+    const goal = { ...(externalPersona ? {} : idleStore.read() || {}), version: 1, kind: 'survive', personaHold: externalPersona,
+      request: externalPersona ? 'Stay nearby between admitted persona goals; react to survival needs without optional resource gathering or exploration' : 'Stay alive and prepare supplies between player requests',
       retainedRequest: retained?.request, blueprint: retained?.blueprint, survival: survival.state,
       // A dream set aside is not chased by the idle loop either.
       dream: standing?.dream && !standing.satisfiedAt && !standing.paused ? standing.dream : undefined,

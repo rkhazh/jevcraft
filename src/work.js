@@ -10337,8 +10337,13 @@ async function runIdle(bot, task, goal, store, { survival, decisionClient, recov
         await keepRoom(bot, task, goal);
         noticeVillage(bot, goal, save);
         noticeLandmarks(bot, goal, save);
-        const acted = ((!turn || turn.unclaimed) && await survival.step(task, goal, save, onStep)) || await lootNearby(bot, task, goal, save, lootActions());
-        if (!acted) await idleWork(bot, task, goal, save, decisionClient, onStep);
+        await require('./persona-idle').idleBackgroundStep({
+          hold: goal.personaHold === true,
+          survive: async () => (!turn || turn.unclaimed) && await survival.step(task, goal, save, onStep),
+          loot: () => lootNearby(bot, task, goal, save, lootActions()),
+          work: () => idleWork(bot, task, goal, save, decisionClient, onStep),
+          stopMotion: () => { bot.pathfinder.setGoal(null); bot.clearControlStates(); goal.step = { action: 'persona_hold' }; },
+        });
       }
       failures = 0; delete goal.lastError; delete goal.lastErrorAt; save(); onStep(goal); narrate(bot, goal);
     } catch (err) {
