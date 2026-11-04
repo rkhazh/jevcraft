@@ -8988,33 +8988,52 @@ class Survival {
     // too (note 520).
     const { occupant } = require('./work');
     this.state.sealing = { origin: { ...origin }, at: Date.now() };
-    for (const [i, p] of cells.entries()) {
+    const visited = new Set(), obstructions = new Map();
+    try {
+    for (let i = 0; i < cells.length * 2; i++) {
       task.check();
       if (Date.now() > passEnds) { this.sealFailedFact(goal, save, origin, 'twenty seconds and not sealed'); break; }
+      const fresh = pocketPlan(bot, origin, pocketBiters(bot))?.cells || shelter.missingShell(bot, refuge);
+      const next = require('./closure-order').nextClosure(bot, origin, fresh, { occupant, excluded: visited });
+      for (const skipped of next.skipped) obstructions.set(`${skipped.position.x},${skipped.position.y},${skipped.position.z}`, skipped);
+      if (!next.cell) break;
+      const p = next.cell, cellKey = `${p.x},${p.y},${p.z}`;
+      visited.add(cellKey);
       // The race with a creeper read again before each block, not only at
       // the start (note 843): 25594 (2026-10-01 22:27:19 to 24Z) began a
       // pocket with its creeper out of sight at 8.5, the race not run for
       // it, and was blown up from 20 health with the creeper at 0.3 and no
       // stance asked. Lost now, the pass ends and the encounter is asked.
-      if (creeperRace(bot, cells.length - i)) {
-        this.report(goal, save, { action: 'seal_cut_by_creeper', cells: cells.length - i, origin: { ...origin } });
-        console.log(`[seal] a creeper would go off before the ${cells.length - i} cells left are laid: the pass ends, the encounter is asked`);
+      if (creeperRace(bot, fresh.length)) {
+        this.report(goal, save, { action: 'seal_cut_by_creeper', cells: fresh.length, origin: { ...origin } });
+        console.log(`[seal] a creeper would go off before the ${fresh.length} cells left are laid: the pass ends, the encounter is asked`);
         return false;
       }
       const biter = i > 0 ? biterAtPass(bot) : null;
       if (biter && shelter.missingShell(bot, refuge).length) {
-        this.report(goal, save, { action: 'seal_cut_by_biter', mob: biter.entity.name, cells: cells.length - i, origin: { ...origin } });
-        console.log(`[seal] a ${biter.entity.name} is at arm's length with ${cells.length - i} cells left to lay: the pass ends, the encounter is asked`);
+        this.report(goal, save, { action: 'seal_cut_by_biter', mob: biter.entity.name, cells: fresh.length, origin: { ...origin } });
+        console.log(`[seal] a ${biter.entity.name} is at arm's length with ${fresh.length} cells left to lay: the pass ends, the encounter is asked`);
         return false;
       }
       const name = material(); if (!name) break;
-      if (occupant(bot, p) || danger.some(t => t.entity.position.floored().equals(p))) continue;
-      try { await this.actions.place(bot, task, p, name, { stay }); failedInRow = 0; bot._sealPlaced = { at: Date.now(), cell: { x: p.x, y: p.y, z: p.z } }; }
+      const since = Date.now(), previous = bot._laid?.get(cellKey);
+      try {
+        try { await this.actions.place(bot, task, p, name, { stay }); }
+        finally { if (require('./shaft-retreat').noteReturnCover(bot, this.state, p, { since, previous })) save(); }
+        failedInRow = 0; bot._sealPlaced = { at: Date.now(), cell: { x: p.x, y: p.y, z: p.z } };
+        obstructions.delete(cellKey); save();
+      }
       catch (err) {
-        task.check(); if (['NeedsAir', 'NeedsSafety'].includes(err.name)) throw err;
+        task.check(); if (['NeedsAir', 'NeedsSafety', 'Cancelled'].includes(err.name)) throw err;
         this.state.lastSealError = err.message;
+        obstructions.set(cellKey, { position: { ...p }, reason: 'placement_refused', detail: String(err.message).slice(0, 160) });
         if (++failedInRow >= 3) { this.sealFailedFact(goal, save, origin, `three blocks in a row would not go in (${err.message.slice(0, 160)})`); failedPass = true; break; }
       }
+    }
+    } finally {
+      this.state.lastSealObstructions = { at: Date.now(), origin: { ...origin }, cells: [...obstructions.values()].slice(0, 12) };
+      if (obstructions.size) console.log(`[seal] unfinished cells: ${JSON.stringify(this.state.lastSealObstructions.cells)}`);
+      save();
     }
     if (shelter.inside(bot, refuge) && shelter.sealed(bot, refuge)) { refuge.verifiedAt = new Date().toISOString(); save(); return true; }
     // A pass that ended on blocks that would not go in is not a pocket with

@@ -280,3 +280,16 @@ test('cooldown waiting responds to cancellation and immediate danger',async()=>{
   assert.equal(sleeps,1);assert.equal(f.state.shaftRetreat.phase,'returning');assert.deepEqual(f.dug,[]);
  }
 });
+
+test('return interruption records the specific threat that stopped it',async()=>{
+ for(const kind of ['recent_damage','incoming_projectile','warden_sonic_range','visible_shooter']){
+  const f=fixture();f.bot.world={raycast:()=>null};
+  if(kind==='recent_damage')f.bot._recentHurtAt=Date.now();
+  else if(kind==='incoming_projectile')f.bot.entities={7:{id:7,name:'arrow',position:new Vec3(.5,41.5,1.5),velocity:new Vec3(0,0,-.2)}};
+  else f.bot.entities={7:{id:7,name:kind==='warden_sonic_range'?'warden':'skeleton',position:new Vec3(10.5,40,.5),height:1.8}};
+  await assert.rejects(f.survival.leave(f.task,f.goal,()=>{},f.refuge),{name:'NeedsSafety'});
+  assert.equal(f.state.shaftRetreat.lastInterrupt.reason.kind,kind);
+  assert.equal(f.goal.survivalAction.action,'shaft_return_interrupted');
+  if(kind!=='recent_damage')assert.equal(f.state.shaftRetreat.lastInterrupt.reason.entityId,7);
+ }
+});

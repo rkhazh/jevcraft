@@ -27,8 +27,15 @@ function noteCap(bot,state,p,goal){
  r.caps=(r.caps||[]).filter(c=>!same(c.position,p));
  r.caps.push({position:{...p},name:b.name,stateId:b.stateId});r.phase='sheltered';return true;
 }
+function noteReturnCover(bot,state,p,{since,previous}={}){
+ const r=current(bot,state),b=bot.blockAt(p),laid=bot._laid?.get(`${p.x},${p.y},${p.z}`);
+ if(!r||r.phase!=='returning'||!point(p)||p.x!==r.entry.x||p.z!==r.entry.z||p.y<Math.floor(bot.entity.position.y)+2||p.y>r.entry.y+1)return false;
+ if(!cube(b)||!Number.isInteger(b.stateId)||!laid||laid===previous||laid.name!==b.name||!Number.isFinite(since)||!Number.isFinite(laid.at)||laid.at<since)return false;
+ r.returnCover=[...(r.returnCover||[]).filter(c=>!same(c.position,p)),{position:{...p},name:b.name,stateId:b.stateId,placedAt:laid.at,source:'survival_cover'}].slice(-65);
+ return true;
+}
 function observedCap(bot,r,p){
- const b=bot.blockAt(p),receipt=(r.caps||[]).find(c=>point(c.position)&&same(c.position,p));
+ const b=bot.blockAt(p),receipt=[...(r.returnCover||[]),...(r.caps||[])].find(c=>point(c.position)&&same(c.position,p));
  if(!receipt||!Number.isInteger(receipt.stateId)||!Number.isInteger(b?.stateId)||!fullCube(b))return null;
  const exact=cube(b)&&b.name===receipt.name&&b.stateId===receipt.stateId;
  // Compatibility is an inference from the historical placement, not a
@@ -59,18 +66,27 @@ function preflight(bot,state){
 }
 // Escape does not stop merely because the same unseen distant mob still exists.
 // A fresh hit, projectile or reachable/visible close mob returns control to combat.
-function urgent(bot){
- if(bot._recentHurtAt>Date.now()-2000)return true;
- if(require('./projectile-guard').incoming(bot,{reach:16}).length)return true;
+function urgentReason(bot){
+ if(bot._recentHurtAt>Date.now()-2000)return {kind:'recent_damage',hurtAt:bot._recentHurtAt};
+ const projectile=require('./projectile-guard').incoming(bot,{reach:16})[0];
+ if(projectile)return {kind:'incoming_projectile',entityId:projectile.id,name:projectile.name,position:{...projectile.position}};
  const {BOOM_ACROSS,BOOM_UP}=require('./survival'),{RANGE}=require('./combat-estimate'),{shooter}=require('./mob-policy'),p=bot.entity.position;
- return require('./danger').threats(bot,Math.max(40,...Object.values(RANGE))).some(t=>{
+ for(const t of require('./danger').threats(bot,Math.max(40,...Object.values(RANGE)))){
   const q=t.entity.position;
-  if(t.entity.name==='warden'&&Math.hypot(q.x-p.x,q.z-p.z)<=BOOM_ACROSS&&Math.abs(q.y-p.y)<=BOOM_UP)return true;
-  if(shooter(t.entity)&&t.visible&&t.distance<=(RANGE[t.entity.name]||15))return true;
-  return t.distance<=3||(t.distance<=8&&(t.visible||(t.entity.velocity?.dot?.(p.minus(q))??0)>.05));
- });
+  const facts={entityId:t.entity.id,name:t.entity.name,position:{...q},distance:t.distance,visible:!!t.visible};
+  if(t.entity.name==='warden'&&Math.hypot(q.x-p.x,q.z-p.z)<=BOOM_ACROSS&&Math.abs(q.y-p.y)<=BOOM_UP)return {kind:'warden_sonic_range',...facts};
+  if(shooter(t.entity)&&t.visible&&t.distance<=(RANGE[t.entity.name]||15))return {kind:'visible_shooter',...facts};
+  if(t.distance<=3||(t.distance<=8&&(t.visible||(t.entity.velocity?.dot?.(p.minus(q))??0)>.05)))return {kind:'close_or_approaching_mob',...facts};
+ }
+ return null;
 }
-async function returnStep(bot,task,state,goal,save,{dig,pillar=require('./pillar-recovery').pillarUp,report=()=>{},interrupt=()=>urgent(bot)}={}){
+const urgent=bot=>!!urgentReason(bot);
+function interrupted(bot,r,reason,report,save){
+ r.lastInterrupt={at:Date.now(),position:{...bot.entity.position},reason:typeof reason==='object'?reason:{kind:'external_interrupt'}};
+ report({action:'shaft_return_interrupted',pending:true,target:{...r.entry},...r.lastInterrupt});save();
+ throw Object.assign(new Error(`Shaft return interrupted by ${r.lastInterrupt.reason.kind}${r.lastInterrupt.reason.name?`: ${r.lastInterrupt.reason.name}`:''}`),{name:'NeedsSafety'});
+}
+async function returnStep(bot,task,state,goal,save,{dig,pillar=require('./pillar-recovery').pillarUp,report=()=>{},interrupt=()=>urgentReason(bot)}={}){
  const r=current(bot,state);if(!r)return false;
  r.phase='returning';save();
  if(arrived(bot,r)){
@@ -92,7 +108,7 @@ async function returnStep(bot,task,state,goal,save,{dig,pillar=require('./pillar
   task.check();
   const p=bot.entity.position.floored();
   if(p.x!==r.entry.x||p.z!==r.entry.z){r.phase='displaced';throw Object.assign(new Error('Body left the recorded shaft column'),{name:'Blocked'});}
-  if(interrupt())throw Object.assign(new Error('A new immediate threat interrupts the shaft return'),{name:'NeedsSafety'});
+  const reason=interrupt();if(reason)interrupted(bot,r,reason,report,save);
  };
  guard.check();
  goal.step={action:'return_from_shaft',target:{...r.entry}};
@@ -123,7 +139,7 @@ async function waitStep(bot,task,state,goal,save,{report=()=>{},now=Date.now,sle
   report({...goal.step,position:{...bot.entity.position}});
   while(now()<until){
    task.check();require('./vitals').checkAir(bot);
-   if(urgent(bot))throw Object.assign(new Error('Immediate danger interrupts the shaft return wait'),{name:'NeedsSafety'});
+   const reason=urgentReason(bot);if(reason)interrupted(bot,r,reason,report,save);
    if(resume(bot,state)){save();if(r.phase==='displaced')return false;}
    await sleep(Math.min(100,until-now()));
   }
@@ -147,4 +163,4 @@ function resume(bot,state){
  }
  return false;
 }
-module.exports={current,descentBlocked,begin,noteCap,observedCap,capMatches,arrived,preflight,urgent,returnStep,waitStep,endQuietEncounter,resume};
+module.exports={current,descentBlocked,begin,noteCap,noteReturnCover,observedCap,capMatches,arrived,preflight,urgent,urgentReason,returnStep,waitStep,endQuietEncounter,resume};
