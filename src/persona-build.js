@@ -8,7 +8,11 @@ function fail(message){const code=({'building disabled':'building_disabled','unk
 function validate(source,registry) {
  if(!source||Object.keys(source).sort().join()!==['name','description','size','palette','regions','entrance','existingOffset','site'].sort().join()||!Array.isArray(source.size)||source.size.some((n,i)=>n>LIMITS.max_size[i])||!Array.isArray(source.regions)||source.regions.length>LIMITS.max_regions||source.site!==null)fail('schematic exceeds policy');
  if(Buffer.byteLength(JSON.stringify(source))>24000)fail('schematic too large');
- const design=validateSchematic(source,registry);
+ let design;
+ try{design=validateSchematic(source,registry);}catch(err){
+  if(typeof err.message==='string'&&err.message.startsWith('Invalid building schematic:'))err.validationDetail=err.message.replace(/[\p{Cc}\p{Cf}]/gu,' ').slice(0,240);
+  throw err;
+ }
  if(design.blocks.length>LIMITS.max_blocks)fail('too many blocks');
  return {...design,backend:'persona-validated',createdAt:new Date().toISOString()};
 }

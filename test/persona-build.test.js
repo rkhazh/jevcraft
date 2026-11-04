@@ -61,3 +61,7 @@ test('editing unchanged original natural ground does not require completed enclo
  bot.blockAt=()=>({name:'dirt',stateId:11,boundingBox:'block'});assert.throws(()=>verifiedEditOwnership(bot,{blueprint}));
  bot.blockAt=()=>({name:'diamond_block',stateId:10,boundingBox:'block'});assert.throws(()=>verifiedEditOwnership(bot,{blueprint}));
 });
+test('actual stairs validator exposes sanitized actionable detail without accepting geometry',()=>{
+ const {bot}=fixture();const source=schematic();source.palette=['oak_stairs'];source.regions=[{from:[0,0,0],to:[0,0,0],block:'oak_stairs',properties:{facing:'north'}}];
+ assert.throws(()=>prepareBuild(bot,{mode:'fresh',build_id:null,schematic:source},'persona:p',{enabled:true}),err=>typeof err.validationDetail==='string'&&err.validationDetail.includes('half top or bottom')&&err.validationDetail.length<=240);
+});

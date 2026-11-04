@@ -19,7 +19,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   const old=active; active=null;clearTimeout(old.timer);
   await stop(id,status); emit({type:'goal',goal_id:id,status,summary:`Persona goal ${status}`,verified:false});return {status,goal_id:id};
  }
- function rejection(p,reason){return {status:'rejected',reason,goal_id:p?.goal_id??null,session_id:sessionId};}
+ function rejection(p,reason){const detail=typeof reason==='object'?reason.detail:undefined;reason=typeof reason==='object'?reason.reason:reason;return {status:'rejected',reason,...(detail?{detail}:{}),goal_id:p?.goal_id??null,session_id:sessionId};}
  function check(p) {
   if(!exact(p,['schema_version','goal_id','persona_id','session_id','observation_id','issued_at','expires_at','state','spec']))return 'invalid_shape';
   if(p.schema_version!==1||p.state!=='proposed'||typeof p.goal_id!=='string'||!/^[0-9a-f-]{36}$/i.test(p.goal_id)||typeof p.persona_id!=='string'||!p.persona_id.length||p.persona_id.length>128)return 'invalid_envelope';
@@ -33,7 +33,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   else if(['follow','come'].includes(s?.kind)){if(!exact(s,['kind','target'])||!players.includes(s.target)||!state.players.includes(s.target))return 'unsupported_spec';}
   else if(s?.kind==='build') {
    if(!exact(s,['kind','request','mode','build_id','schematic'])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
-   try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(err){return err.code||'invalid_build_geometry';}
+   try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(err){if(!err.code&&typeof err.validationDetail==='string')return {reason:'invalid_build_geometry',detail:err.validationDetail.replace(/[\p{Cc}\p{Cf}]/gu,' ').slice(0,240)};return err.code||'invalid_build_geometry';}
   }
   else return 'unsupported_spec';
   if(impossible(s))return 'unworkable';return null;

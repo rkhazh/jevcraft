@@ -74,3 +74,8 @@ test('typed model builds are policy gated and completion includes verified struc
  const invalid={...f.proposal(),spec:{...p.spec,extra:'bypass'}};assert.equal((await f.persona.submit(invalid)).status,'rejected');await f.persona.close();
  const disabled=fixture();assert.equal((await disabled.persona.submit({...disabled.proposal(),spec:p.spec})).reason,'unsupported_build');await disabled.persona.close();
 });
+test('build validation detail stays bounded and reason code unchanged; internal errors stay private',async()=>{
+ const f=fixture({checkBuild(){throw Object.assign(new Error('internal hidden'),{validationDetail:'oak_stairs needs half top or bottom\n'+ 'x'.repeat(300)})}});
+ const p={...f.proposal(),spec:{kind:'build',request:'Build',mode:'fresh',build_id:null,schematic:{}}};const r=await f.persona.submit(p);assert.equal(r.reason,'invalid_build_geometry');assert.equal(r.detail.length,240);assert.ok(!r.detail.includes('\n'));assert.equal(f.launches(),0);await f.persona.close();
+ const internal=fixture({checkBuild(){throw new Error('secret internal message')}});const r2=await internal.persona.submit({...internal.proposal(),spec:p.spec});assert.equal(r2.reason,'invalid_build_geometry');assert.ok(!('detail' in r2));await internal.persona.close();
+});
