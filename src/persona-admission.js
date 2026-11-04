@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === [...keys].sort().join();
 const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v) ? v.map(x=>JSON.parse(stable(x))) : Object.fromEntries(Object.keys(v).sort().map(k=>[k,JSON.parse(stable(v[k]))]))) : v);
-function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false}) {
+function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({})}) {
  rendezvous=require('./persona-rendezvous').validateRendezvous(rendezvous);
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
  let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve();
@@ -12,7 +12,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
  function snapshot() {
   const state=read(), id=randomUUID(), now=Date.now()/1000;
   observations.set(id,{at:now,mono:performance.now()});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
-  return {...state,last_result:lastResult?structuredClone(lastResult):null,movement_capabilities:{allow_visible_players:allowVisiblePlayers,local_move:{enabled:allowLocalMove,max_distance:16,arrival_distance:1.5}},rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
+  return {...state,last_result:lastResult?structuredClone(lastResult):null,movement_capabilities:{allow_visible_players:allowVisiblePlayers,local_move:{...movementAffordances(),enabled:allowLocalMove,max_distance:16,arrival_distance:1.5}},rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
  }
  function valid(id) {return !closed && active?.proposal.goal_id===id && active.deadline>performance.now();}
  async function cancelNow(id, status='cancelled') {
@@ -33,7 +33,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   const s=p.spec;
   if(['obtain','craft'].includes(s?.kind)) {if(!exact(s,['kind','item','count','deliver'])||!items.includes(s.item)||!state.items.includes(s.item)||!Number.isInteger(s.count)||s.count<1||s.count>64||s.deliver!==false)return 'unsupported_spec';}
   else if(['follow','come'].includes(s?.kind)){if(!exact(s,['kind','target'])||!(players.includes(s.target)||(allowVisiblePlayers&&state.players.includes(s.target)&&state.player_identities?.some(p=>p.name===s.target&&/^[0-9a-f-]{36}$/i.test(p.uuid))))||(!state.players.includes(s.target)&&!(s.kind==='come'&&rendezvous?.target===s.target&&['overworld','minecraft:overworld'].includes(state.dimension))))return 'unsupported_spec';}
-  else if(s?.kind==='move'){if(!allowLocalMove||!exact(s,['kind','target'])||!exact(s.target,['x','y','z'])||![s.target.x,s.target.y,s.target.z].every(Number.isFinite)||!checkMove(s.target))return 'unsupported_move';}
+  else if(s?.kind==='move'){if(!allowLocalMove||!exact(s,['kind','target'])||!exact(s.target,['x','y','z'])||![s.target.x,s.target.y,s.target.z].every(Number.isFinite)||!checkMove(s.target))return 'unsupported_move';if(state.position&&Math.hypot(state.position.x-s.target.x,state.position.y-s.target.y,state.position.z-s.target.z)<=1.5)return 'already_at_move_target';}
   else if(s?.kind==='build') {
    if(!exact(s,['kind','request','mode','build_id','schematic',...(Object.hasOwn(s,'site_binding')?['site_binding']:[])])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
    try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(err){if(!err.code&&typeof err.validationDetail==='string')return {reason:'invalid_build_geometry',detail:err.validationDetail.replace(/[\p{Cc}\p{Cf}]/gu,' ').slice(0,240)};return err.code||'invalid_build_geometry';}

@@ -111,3 +111,8 @@ test('typed local move is opt-in and completion proves actual position rather th
  const next={...f.proposal(),spec};await f.persona.submit(next);f.body.position={...spec.target};f.persona.finish(next.goal_id,'complete');assert.equal(f.persona.snapshot().last_result.verified,true);await f.persona.close();
  const disabled=fixture();assert.equal((await disabled.persona.submit({...disabled.proposal(),spec})).reason,'unsupported_move');await disabled.persona.close();
 });
+test('move admission rejects an already-arrived point without starting another goal',async()=>{
+ const f=fixture({allowLocalMove:true,checkMove:()=>true,movementAffordances:()=>({standing_points:[{x:4,y:64,z:0}],observed_at:123,route_prevalidated:false})});f.body.position={x:0,y:64,z:0};
+ assert.equal(f.persona.snapshot().movement_capabilities.local_move.standing_points.length,1);
+ const reply=await f.persona.submit({...f.proposal(),spec:{kind:'move',target:{x:1,y:64,z:0}}});assert.equal(reply.reason,'already_at_move_target');assert.equal(f.launches(),0);await f.persona.close();
+});

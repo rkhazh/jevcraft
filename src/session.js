@@ -844,7 +844,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     };
     const buildApi=require('./persona-build'), buildEnabled=process.env.JEV_PERSONA_BUILD==='1';
     persona = require('./persona-admission').createPersona({
-      rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
+      rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,movementAffordances:()=>require('./persona-move').standingAffordances(bot,{enabled:personaLocalMove&&ready&&!ended}),checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
         vision_capabilities:vision?.capabilities()||{enabled:false,look:false},
         execution:require('./persona-execution').executionSnapshot(bot,active),

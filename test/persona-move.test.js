@@ -16,3 +16,9 @@ test('ack without arrival fails; lease cancellation and timeout restore movement
  bot.pathfinder.goto=()=>new Promise(()=>{});let checks=0;await assert.rejects(moveStep(bot,{check(){if(++checks>1)throw Object.assign(new Error('expired'),{name:'Cancelled'})}},goal,()=>{},{checkIntervalMs:1}),e=>e.name==='Cancelled');assert.equal(bot.pathfinder.movements,original);
  await assert.rejects(moveStep(bot,{check(){}},goal,()=>{},{timeoutMs:2}),/timed out/);assert.equal(bot.pathfinder.movements,original);
 });
+test('standing affordances are bounded loaded safe geometry, spatially varied and not already arrived',()=>{
+ const {standingAffordances}=require('../src/persona-move'),{bot}=fixture();let reads=0;const original=bot.blockAt;bot.blockAt=p=>{reads++;return p.x<0?null:p.z>3?{name:'lava',boundingBox:'empty',shapes:[]}:original(p)};
+ const result=standingAffordances(bot,{enabled:true,now:()=>123});assert.equal(result.observed_at,123);assert.equal(result.route_prevalidated,false);assert.ok(result.standing_points.length>0&&result.standing_points.length<=12);assert.ok(reads<=384);assert.equal(result.block_reads,reads);
+ for(const p of result.standing_points){assert.ok(Math.hypot(p.x-.5,p.y-64,p.z-.5)>1.5);assert.equal(canMove(bot,p,{enabled:true}),true);assert.ok(p.x>=0&&Math.floor(p.z)<=3);}
+ assert.deepEqual(standingAffordances(bot).standing_points,[]);bot.blockAt=()=>null;assert.deepEqual(standingAffordances(bot,{enabled:true}).standing_points,[]);
+});

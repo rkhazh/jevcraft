@@ -15,6 +15,26 @@ function safeStanding(bot,p){
 function canMove(bot,target,{enabled=false,anchor=bot.entity?.position}={}){
  return enabled&&bot.game?.gameMode==='survival'&&dimension(bot)==='overworld'&&!!anchor&&point(target)&&Math.hypot(target.x-anchor.x,target.y-anchor.y,target.z-anchor.z)<=RANGE&&safeStanding(bot,target);
 }
+function standingAffordances(bot,{enabled=false,now=()=>Date.now()/1000}={}){
+ const result={observed_at:now(),standing_points:[],route_prevalidated:false,search_radius:8,vertical_range:2,block_read_limit:384,block_reads:0};
+ const anchor=bot.entity?.position;
+ if(!enabled||!anchor||![anchor.x,anchor.y,anchor.z].every(Number.isFinite)||bot.game?.gameMode!=='survival'||dimension(bot)!=='overworld')return result;
+ const cache=new Map(),probe=Object.create(bot),found=[],seen=new Set();
+ probe.blockAt=p=>{const key=`${p.x},${p.y},${p.z}`;if(cache.has(key))return cache.get(key);if(result.block_reads>=result.block_read_limit)return null;result.block_reads++;const block=bot.blockAt(p);cache.set(key,block);return block;};
+ // Spatial coverage only, independent of goals, structures, materials or a route.
+ for(const radius of [2,4,8])for(let sector=0;sector<8;sector++){
+  const angle=sector*Math.PI/4,x=Math.floor(anchor.x+Math.cos(angle)*radius)+.5,z=Math.floor(anchor.z+Math.sin(angle)*radius)+.5;
+  if(Math.hypot(x-anchor.x,z-anchor.z)>8)continue;
+  for(const dy of [0,1,-1,2,-2]){
+   const target={x,y:Math.floor(anchor.y)+dy,z},key=JSON.stringify(target);
+   if(Math.abs(target.y-anchor.y)>2||Math.hypot(x-anchor.x,target.y-anchor.y,z-anchor.z)<=ARRIVAL||seen.has(key))continue;
+   if(canMove(probe,target,{enabled:true,anchor})){found.push(target);seen.add(key);break;}
+  }
+ }
+ const count=Math.min(12,found.length);
+ for(let i=0;i<count;i++)result.standing_points.push(found[Math.floor(i*found.length/count)]);
+ return result;
+}
 function blocked(message){return Object.assign(new Error(message),{name:'Blocked',personaMoveTerminal:true});}
 async function moveStep(bot,task,goal,save,{timeoutMs=15000,checkIntervalMs=100}={}){
  task.check();const policy=goal.personaMovePolicy,p=goal.target;
@@ -34,4 +54,4 @@ async function moveStep(bot,task,goal,save,{timeoutMs=15000,checkIntervalMs=100}
  }catch(err){if(['Cancelled','NeedsAir','NeedsSafety','Stalled'].includes(err.name))throw err;throw blocked(String(err.message||'Local route unavailable').slice(0,240));}
  finally{clearTimeout(timer);clearInterval(checks);bot.pathfinder.setGoal(null);bot.clearControlStates();bot.pathfinder.setMovements(original);}
 }
-module.exports={RANGE,ARRIVAL,safeStanding,canMove,moveStep};
+module.exports={RANGE,ARRIVAL,safeStanding,canMove,moveStep,standingAffordances};
