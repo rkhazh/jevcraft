@@ -2,6 +2,7 @@
 const {Vec3}=require('vec3');
 const {matchesBuildBlock,matchesOwnership}=require('./build-blocks');
 const {blueprintFingerprint}=require('./restoration-permit');
+const {isDoor,doorPairMatches}=require('./doors');
 const key=p=>`${p.x},${p.y},${p.z}`,vec=p=>new Vec3(p.x,p.y,p.z);
 const directions=[[0,1,0],[1,0,0],[-1,0,0],[0,0,1],[0,0,-1],[0,-1,0]];
 const air=b=>b&&['air','cave_air','void_air'].includes(b.name);
@@ -9,6 +10,35 @@ const cube=b=>b?.shapes?.length===1&&b.shapes[0].every((n,i)=>n===(i<3?0:1));
 // Reversible full cubes only: no containers, paired/oriented pieces, falling
 // blocks, fluids, fragile glass or block entities whose contents could be lost.
 const simple=name=>/^(?:[a-z_]+_planks|cobblestone|stone|stone_bricks|bricks|dirt|andesite|diorite|granite|deepslate|cobbled_deepslate)$/.test(name||'');
+const stableCube=b=>cube(b)&&(simple(b.name)||/^(?:grass_block|coarse_dirt|rooted_dirt|podzol|tuff|sandstone|red_sandstone|terracotta)$/.test(b.name));
+const cardinal={north:[0,0,-1],south:[0,0,1],east:[1,0,0],west:[-1,0,0]};
+const position=p=>({x:p.x,y:p.y,z:p.z});
+function neighborRejection(bot,opening,p){
+ const block=bot.blockAt(p),properties=block?.getProperties?.()||{};
+ const reject=reason=>({reason,neighbor:{position:position(p),material:block?.name||null,properties}});
+ if(!block)return reject('unknown_neighbor');
+ if(['water','lava','bubble_column'].includes(block.name)||String(properties.waterlogged)==='true')return reject('fluid_neighbor');
+ if(air(block)||stableCube(block))return null;
+ let supports;
+ if(isDoor(block.name)){
+  if(!['lower','upper'].includes(properties.half))return reject('unknown_dependency');
+  const lower=properties.half==='lower'?p:p.offset(0,-1,0),upper=lower.offset(0,1,0),floor=lower.offset(0,-1,0);
+  supports=[lower,upper,floor];
+  // DoorBlock.updateShape depends on its vertical pair and lower support,
+  // not the wall alongside it. Preserve both halves and that actual support.
+  if(supports.some(q=>q.equals(opening)))return reject('supports_neighbor');
+  if(!doorPairMatches(bot.blockAt(lower),bot.blockAt(upper))||!stableCube(bot.blockAt(floor)))return reject('unverified_neighbor_support');
+  return null;
+ }
+ if(['wall_torch','soul_wall_torch','ladder'].includes(block.name)){
+  const facing=cardinal[properties.facing];if(!facing)return reject('unknown_dependency');
+  supports=[p.offset(...facing.map(n=>-n))];
+ }else if(['torch','soul_torch'].includes(block.name))supports=[p.offset(0,-1,0)];
+ else return reject('unsupported_neighbor'); // Includes falling blocks and unmodelled attachments.
+ if(supports.some(q=>q.equals(opening)))return reject('supports_neighbor');
+ if(!supports.every(q=>stableCube(bot.blockAt(q))))return reject('unverified_neighbor_support');
+ return null;
+}
 function accessBlocked(message='I cannot reach the next part of the building with the available local access; the design and progress are saved'){
  return Object.assign(new Error(message),{name:'ConstructionAccessBlocked',personaBuildTerminal:true});
 }
@@ -17,26 +47,41 @@ function sameProject(bot,goal){
  return entry&&entry.from===goal.from&&entry.dimension===String(bot.game?.dimension||'').replace(/^minecraft:/,'')&&
   blueprintFingerprint(entry.blueprint)===blueprintFingerprint(goal.blueprint)?entry:null;
 }
-function safeOpening(bot,goal,opening,expected){
+function openingRejection(bot,goal,opening,expected){
  const entry=sameProject(bot,goal),p=vec(opening),block=bot.blockAt(p);
- if(!entry||bot.buildRegistry.editProtection(bot,entry).has(key(p))||opening.companion||Object.keys(opening.properties||{}).length||!simple(opening.material)||!cube(block)||!block.diggable||
-  !matchesBuildBlock(block,opening)||!matchesOwnership(block,expected??entry.buildOwned?.[key(p)]))return false;
- // Removing a support must not drop attachments, release liquid or falling
- // blocks. Unknown neighboring geometry is not evidence that opening is safe.
- return directions.every(([x,y,z])=>{const b=bot.blockAt(p.offset(x,y,z));return air(b)||cube(b)&&simple(b.name);});
+ if(!entry)return {reason:'project_changed'};
+ if(bot.buildRegistry.editProtection(bot,entry).has(key(p)))return {reason:'protected_by_other_structure'};
+ if(opening.companion||Object.keys(opening.properties||{}).length||!simple(opening.material))return {reason:'unsupported_opening'};
+ if(!block)return {reason:'unknown_opening'};
+ if(!cube(block)||!block.diggable||!matchesBuildBlock(block,opening))return {reason:'opening_changed'};
+ if(!matchesOwnership(block,expected??entry.buildOwned?.[key(p)]))return {reason:'no_exact_ownership_receipt'};
+ // Known dependencies are directional. All unknown geometry, fluids, falling
+ // blocks and unmodelled attachments remain closed to temporary excavation.
+ for(const [x,y,z]of directions){const rejection=neighborRejection(bot,p,p.offset(x,y,z));if(rejection)return rejection;}
+ return null;
 }
-function openingCandidates(bot,goal,missing){
+function safeOpening(bot,goal,opening,expected){return !openingRejection(bot,goal,opening,expected);}
+function openingCandidates(bot,goal,missing,diagnostic){
+ if(diagnostic)Object.assign(diagnostic,{checked_count:0,candidate_count:0,rejected:[]});
  if(!goal.personaGoalId||goal.buildAccess||!sameProject(bot,goal))return [];
  const planned=new Map(goal.blueprint.blocks.map(c=>[key(c),c])),seen=new Set(),out=[];
  for(const target of missing.slice(0,16)){
   if(target.companion||!simple(target.material)||Object.keys(target.properties||{}).length)continue;
   for(const [x,y,z]of directions){
    const opening=planned.get(key(vec(target).offset(x,y,z)));
-   if(!opening||seen.has(key(opening))||!safeOpening(bot,goal,opening))continue;
-   seen.add(key(opening));out.push({position:opening,operation:'dig',material:opening.material,accessTarget:target});
+   if(!opening||seen.has(key(opening)))continue;
+   seen.add(key(opening));if(diagnostic)diagnostic.checked_count++;
+   const rejection=openingRejection(bot,goal,opening);
+   if(rejection){if(diagnostic&&diagnostic.rejected.length<8)diagnostic.rejected.push({position:position(opening),material:opening.material,...rejection});continue;}
+   out.push({position:opening,operation:'dig',material:opening.material,accessTarget:target});
   }
  }
+ if(diagnostic)diagnostic.candidate_count=Math.min(out.length,16);
  return out.slice(0,16);
+}
+function openingFailureSummary(diagnostic){
+ const details=diagnostic.rejected.slice(0,3).map(r=>`(${r.position.x}, ${r.position.y}, ${r.position.z}) ${r.reason}${r.neighbor?` ${r.neighbor.material||'unloaded'} at (${r.neighbor.position.x}, ${r.neighbor.position.y}, ${r.neighbor.position.z})`:''}`);
+ return `${diagnostic.candidate_count} safe opening candidates had no reachable route.${details.length?` Rejected openings: ${details.join('; ')}.`:''}`;
 }
 function checkpoint(bot,goal,save){
  // Normal goal saves are debounced and the registry is otherwise updated only
@@ -93,4 +138,4 @@ async function continueOpening(bot,task,goal,save,{choose,execute,acquire}){
  if(a.phase==='opening'&&air(bot.blockAt(vec(a.opening)))){a.phase='repairing';checkpoint(bot,goal,save);}
  return true;
 }
-module.exports={accessBlocked,openingCandidates,startOpening,continueOpening,safeOpening};
+module.exports={accessBlocked,openingCandidates,openingFailureSummary,startOpening,continueOpening,safeOpening};

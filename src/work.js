@@ -5256,9 +5256,11 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     // Only actual recorded placement ownership is retained for persona builds.
     // Include placements made during this lease before considering access.
     bot.buildRegistry?.remember(goal,{dimension:dimensionName(bot),status:'unfinished'});
-    const opening = await chooseConstructionWork(bot, task, goal, access.openingCandidates(bot,goal,missing));
+    const diagnostic = {}, candidates = access.openingCandidates(bot,goal,missing,diagnostic);
+    const opening = await chooseConstructionWork(bot, task, goal, candidates);
     if (opening) { access.startOpening(bot,goal,opening,save); return false; }
-    throw Object.assign(access.accessBlocked(), {buildAccessTarget:missing[0] || clearing[0]?.position});
+    console.log(JSON.stringify({constructionOpening:{at:Date.now()/1000,goal_id:goal.personaGoalId,build_id:goal.buildId,...diagnostic}}));
+    throw Object.assign(access.accessBlocked(`Local construction access is blocked. ${access.openingFailureSummary(diagnostic)} The design and progress are saved.`), {buildAccessTarget:missing[0] || clearing[0]?.position});
   }
   if (!work) throw new Blocked('I cannot reach the next part of the building yet; the design and progress are saved');
   delete goal.buildBatchRechosen;
