@@ -110,6 +110,14 @@ async function steadyConstructionSwim(bot, task) {
     guard: () => checkAir(bot), until: () => bot.entity.position.y >= surface + .1 });
 }
 
+const accessDiagnosticTimes=new WeakMap();
+function constructionAccessDiagnostic(bot,goal,attempts){
+ return {at:Date.now()/1000,goal_id:goal?.personaGoalId||null,build_id:goal?.buildId||null,candidate_count:attempts.length,candidates:attempts.slice(0,4).map(({candidate,direct,routeStatus})=>({
+  position:{x:candidate.position.x,y:candidate.position.y,z:candidate.position.z},operation:candidate.operation,direct_reachable:direct,route_status:typeof routeStatus==='string'?routeStatus.slice(0,40):'not_surveyed',
+  neighbors:directions.map(face=>{const p=vec(candidate.position).plus(face),block=bot.blockAt(p);return {position:{x:p.x,y:p.y,z:p.z},loaded:!!block,material:block?String(block.name).slice(0,80):null,full_cube:!!block?.shapes?.some(s=>s.length===6&&s.every((n,i)=>n===(i<3?0:1)))};})
+ }))};
+}
+
 async function chooseConstructionWork(bot, task, goal, candidates) {
   await steadyConstructionSwim(bot, task);
   const restore = constructionMovement(bot, goal);
@@ -117,16 +125,20 @@ async function chooseConstructionWork(bot, task, goal, candidates) {
     const ordered = candidates.map(candidate => ({ ...candidate, destination: new ConstructionGoal(bot, candidate.position, candidate.operation, candidate) }))
       .sort((a, b) => (a.priority || 0) - (b.priority || 0) || vec(a.position).distanceTo(bot.entity.position) - vec(b.position).distanceTo(bot.entity.position));
     const orderedCleanup = ['cleanup', 'cleanup_access'].includes(goal.buildPhase);
+    const attempts=[];
     const ready = !orderedCleanup && ordered.find(c => c.destination.reachable(bot.entity.position));
     if (ready) return ready;
     // Inspect several possible work faces before asking recovery to help with
     // access. One unreachable nearest block must not block the entire site.
     for (const candidate of ordered.slice(0, 16)) {
       task.check();
-      if (candidate.destination.reachable(bot.entity.position)) return candidate;
+      const direct=candidate.destination.reachable(bot.entity.position);
+      if (direct) return candidate;
       const route = await surveyRoute(bot, task, bot.pathfinder.movements, candidate.destination, 350);
+      attempts.push({candidate,direct,routeStatus:route.status});
       if (route.status === 'success') return candidate;
     }
+    if(goal.personaGoalId&&Date.now()-(accessDiagnosticTimes.get(goal)||0)>=5000){accessDiagnosticTimes.set(goal,Date.now());console.log(JSON.stringify({constructionAccess:constructionAccessDiagnostic(bot,goal,attempts)}));}
     return null;
   } finally { restore(); }
 }
@@ -151,4 +163,4 @@ async function approachConstruction(bot, task, goal, point, operation, cell) {
     return destination.placement?.getFaceAndRef(bot.entity.position.offset(0, 1.62, 0));
   } finally { restore(); }
 }
-module.exports = { ConstructionGoal, constructionMovement, chooseConstructionWork, approachConstruction };
+module.exports = { constructionAccessDiagnostic, ConstructionGoal, constructionMovement, chooseConstructionWork, approachConstruction };
