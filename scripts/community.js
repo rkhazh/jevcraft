@@ -13,6 +13,8 @@ async function main(){
  const password=process.env.MC_LOGIN_PASSWORD;
  for(const method of ['log','warn','error']){const original=console[method];console[method]=(...args)=>original(...args.map(x=>String(x).split(password).join('[redacted]')));}
  fs.mkdirSync(directory,{recursive:false,mode:0o700});
+ const stateDirectory=require('../src/community-profile').communityStateDirectory(profile.character,directory);
+ fs.mkdirSync(stateDirectory,{recursive:true,mode:0o700});
  // Lock profile options even if the shell inherited local experiment settings.
  Object.assign(process.env,{JEV_SVC_ENABLED:process.env.JEV_SVC_ENABLED==='1'?'1':'0',JEV_SVC_PROTOCOL:'20',JEV_PROVIDER:'openrouter',OPENROUTER_JEV_MODEL:'typesafe/jev-1.14',MC_WORLD_ID:profile.worldId,JEV_PERSONA_MODE:'1',JEV_PERSONA_BUILD:profile.build?'1':'0',JEV_NO_QUIET_RESTART:'1',MC_COMMAND_USERS:'',JEV_PERSONA_PLAYERS:'',JEV_PERSONA_PORT:String(profile.port)});
  let session,server,timer,killTimer;let stopped=false;
@@ -23,9 +25,9 @@ async function main(){
  for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>stop(signal));
  timer=setTimeout(()=>stop('600-second maximum elapsed'),seconds*1000);
  try{
-  session=createSession(config,client,{stateDirectory:path.join(directory,'state'),authenticate:(bot,cfg)=>communityAuth(bot,cfg,{password,allowRegister:process.env.JEV_COMMUNITY_FIRST_REGISTER==='1',successText:process.env.MC_LOGIN_SUCCESS_TEXT})});
-  client.ledger=require('../src/http-usage-ledger').attachHttpUsageLedger(client.ledger,path.join(directory,'http-usage.jsonl'),{maxEntries:limit,onError:()=>stop('HTTP usage ledger unavailable')});
   server=await require('../src/persona-transport').startPersonaTransport({getSession:()=>session,token:process.env.JEV_PERSONA_TOKEN,port:profile.port});
+  session=createSession(config,client,{stateDirectory,authenticate:(bot,cfg)=>communityAuth(bot,cfg,{password,allowRegister:process.env.JEV_COMMUNITY_FIRST_REGISTER==='1',successText:process.env.MC_LOGIN_SUCCESS_TEXT})});
+  client.ledger=require('../src/http-usage-ledger').attachHttpUsageLedger(client.ledger,path.join(directory,'http-usage.jsonl'),{maxEntries:limit,onError:()=>stop('HTTP usage ledger unavailable')});
   const outcome=await session.closed;console.log(JSON.stringify({communityClosed:outcome,httpAttempts:budget.used,httpLimit:limit}));
  }finally{clearTimeout(timer);clearTimeout(killTimer);session?.shutdown();if(server)await new Promise(resolve=>server.close(resolve));}
 }
