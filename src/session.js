@@ -282,6 +282,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       task.check = () => { if (!persona.valid(goal.personaGoalId)) task.cancel(); return check(); };
     }
     const session = { task, goal };
+    session.startedAt = Date.now(); bot._turn = null;
     active = session;
     session.promise = runGoal(bot, task, goal, workStore, {
       decisionClient: routed, survival,
@@ -424,6 +425,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     memory.bind(goal);
     const task = new Task('survival', goal.request);
     const session = { task, goal, idle: true };
+    session.startedAt = Date.now(); bot._turn = null;
     active = session;
     // The idle loop runs until something else should: a dream whose
     // next request can be launched ends it, and the next tick launches that.
