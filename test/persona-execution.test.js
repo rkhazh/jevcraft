@@ -16,3 +16,9 @@ test('prior-goal, expired and future turn timestamps never claim a current inter
  }
  const expired=executionSnapshot({_turn:{holder:'vitals',phase:'old food',since:now-9000}},{goal,startedAt:now-20000},{now});assert.equal(expired.current_turn.fresh,false);assert.equal(expired.interruption.active,false);
 });
+test('mining execution retains actual block drops count and target coordinates',()=>{
+ const step={action:'mine',block:'red_sand',drops:'red_sand',count:7,sources:['red_sand'],target:{x:10,y:62,z:-20}};
+ const snapshot=executionSnapshot({}, {startedAt:100,goal:{kind:'build',step}},{now:200});
+ assert.equal(snapshot.step.block,'red_sand');assert.equal(snapshot.step.drops,'red_sand');assert.equal(snapshot.step.count,7);assert.equal(snapshot.step.item,null);assert.deepEqual(snapshot.step.target,step.target);assert.deepEqual(snapshot.step.position,step.target);
+ step.target.x=999;assert.equal(snapshot.step.position.x,10);
+});
