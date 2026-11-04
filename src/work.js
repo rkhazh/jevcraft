@@ -1912,13 +1912,14 @@ const bodyError = (message, e, p) => Object.assign(new Error(message), { body: {
 
 // Mineflayer yaw for looking toward each horizontal facing (0 is north, -z).
 const PLACEMENT_YAW = { north: 0, west: Math.PI / 2, south: Math.PI, east: -Math.PI / 2 };
-async function place(bot, task, p, material, { face, properties, stay = false, replaceLiquid = false } = {}) {
+async function place(bot, task, p, material, { face, properties, stay = false, replaceLiquid = false, exact = false } = {}) {
   // Breath first, as every dig checks it: mid-205-b walled a pocket in
   // under water for nine seconds, placing block after block, and nothing
   // looked at its air until two of twenty were left (2026-09-26).
   task.check(); checkAir(bot);
   const cell = { ...p, material, properties };
-  if (buildCellComplete(bot, cell)) return;
+  const placementComplete = () => exact ? buildFootprint(cell).every(part => matchesBuildBlock(bot.blockAt(pos(part)),part)) : buildCellComplete(bot,cell);
+  if (placementComplete()) return;
   // Walling in on a ledge: a cell that needs the bot to step aside, back
   // off or walk closer is left, never moved for. Sealing on a Nether ledge
   // with a piglin about, the dream run stepped back off it into the lava
@@ -2003,8 +2004,8 @@ async function place(bot, task, p, material, { face, properties, stay = false, r
       if (face?.to) await bot._placeBlockWithOptions(ref, f.scaled(-1), { delta: face.to.minus(ref.position), swingArm: 'right', ...look });
       else if (facingYaw !== undefined) await bot._placeBlockWithOptions(ref, f.scaled(-1), { swingArm: 'right', ...look });
       else await bot.placeBlock(ref, f.scaled(-1));
-      await waitFor(task, () => buildCellComplete(bot, cell) ||
-        (material.endsWith('_concrete_powder') && bot.blockAt(p)?.name === material.replace('_powder', '')));
+      await waitFor(task, () => placementComplete() ||
+        (!exact && material.endsWith('_concrete_powder') && bot.blockAt(p)?.name === material.replace('_powder', '')));
       if (bot.game.gameMode !== 'creative') await syncPlacementInventory(bot, task);
       return;
     } catch (err) { task.check(); if (err.name === 'NeedsAir') throw err; placementError = err.message; }
@@ -5136,8 +5137,9 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
   if (blueprint.terrain && !blueprint.terrain.prepared) {
     await prepareBuildTerrain(bot, task, goal, save); return false;
   }
-  if (verifyHouse(bot, blueprint).ok && !schematicScaffolding(bot, goal).length) return true;
-  const missing = blueprint.blocks.filter(p => !p.companion && !buildCellComplete(bot, p));
+  const pendingRestoration = p => require('./restoration-permit').restorationIncomplete(bot,goal,p);
+  if (verifyHouse(bot, blueprint).ok && !blueprint.blocks.some(pendingRestoration) && !schematicScaffolding(bot, goal).length) return true;
+  const missing = blueprint.blocks.filter(p => !p.companion && (!buildCellComplete(bot, p) || pendingRestoration(p)));
   const blockedParts = missing.flatMap(p => buildFootprint(p).slice(1).filter(part => !air(bot.blockAt(pos(part))) &&
     (!isDoor(bot.blockAt(pos(p))?.name) || !matchesBuildBlock(bot.blockAt(pos(part)), part))));
   const obstructions = [...new Map([...blueprint.empty.filter(p => !air(bot.blockAt(pos(p)))), ...blockedParts, ...schematicScaffolding(bot, goal)]
@@ -5160,7 +5162,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
   }
   // Retain one working lot instead of independently reselecting a material on
   // every block. Recipe inputs shared by the lot are gathered together.
-  if (!goal.buildBatch || !remainingBuildBatch(bot, goal.buildBatch).length) {
+  if (!goal.buildBatch || !remainingBuildBatch(bot, goal.buildBatch, goal).length) {
     delete goal.buildBatch;
     if (missing.length) {
       const stock = planningInventory(bot);
@@ -5171,7 +5173,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
   const batch = goal.buildBatch;
   if (await takeOutBatch(bot, task, goal, save)) return false;
   if (batch) {
-    const cells = remainingBuildBatch(bot, batch), outputs = materialCounts(cells);
+    const cells = remainingBuildBatch(bot, batch, goal), outputs = materialCounts(cells);
     if (bot.game.gameMode === 'creative') for (const output of outputs) output.count = 1;
     if (batch.phase === 'gather' || outputs.some(o => !countOf(bot, o.item))) {
       const stock = await withUsableWorkstations(bot, task, planningInventory(bot), outputs.map(o => o.item));
@@ -5187,7 +5189,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
   }
   if (!missing.length) goal.buildPhase = 'cleanup';
   const layer = Math.min(...missing.map(p => p.y));
-  const availablePlacements = (batch ? remainingBuildBatch(bot, batch) : []).filter(p => countOf(bot, p.material) &&
+  const availablePlacements = (batch ? remainingBuildBatch(bot, batch, goal) : []).filter(p => countOf(bot, p.material) &&
     (air(bot.blockAt(pos(p))) || bot.blockAt(pos(p))?.diggable) &&
     (!isDoor(p.material) || !air(bot.blockAt(pos(p))) || air(bot.blockAt(pos(p).offset(0, 1, 0)))) &&
     faces.some(f => bot.blockAt(pos(p).plus(f))?.boundingBox === 'block'))
@@ -5237,7 +5239,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     position: { ...p }, material: work.material, properties: work.properties, remainingBlocks: missing.length }; save(); onStep(goal);
   try { await executeConstructionWork(bot, task, goal, save, work); }
   finally { if (repairedAccess) { goal.buildPhase = 'cleanup'; save(); } }
-  return verifyHouse(bot, blueprint).ok && !schematicScaffolding(bot, goal).length;
+  return verifyHouse(bot, blueprint).ok && !blueprint.blocks.some(pendingRestoration) && !schematicScaffolding(bot, goal).length;
 }
 
 async function executeConstructionWork(bot, task, goal, save, work) {
@@ -5247,6 +5249,7 @@ async function executeConstructionWork(bot, task, goal, save, work) {
   }
   const face = await approachConstruction(bot, task, goal, p, work.operation, work);
   const footprint = buildFootprint({ ...p, material: work.material, properties: work.properties });
+  const exactPlacement = work.operation==='place' && require('./restoration-permit').restorationIncomplete(bot,goal,{...p,material:work.material,properties:work.properties});
   for (const part of footprint) if (!canClearSchematicBlock(goal.blueprint, goal.buildOwned, bot.blockAt(pos(part))) && !(work.operation==='dig'&&bot._restorationPermit?.allows(bot,goal,pos(part)))) throw new Blocked(`Building site changed at ${pos(part)}`);
   if (work.operation === 'dig') {
     // dig() first updates the local world optimistically. Keep ownership until
@@ -5265,14 +5268,14 @@ async function executeConstructionWork(bot, task, goal, save, work) {
     let placed = false;
     const observe = (_old, block) => { if (block.position.equals(p)) placed = true; };
     bot.on('blockPlaced', observe);
-    try { await require('./structure-mutations').withBuildMutation(bot,task,goal,p,'place',()=>place(bot, task, p, work.material, { face, properties: work.properties }),{cells:footprint}); }
+    try { await require('./structure-mutations').withBuildMutation(bot,task,goal,p,'place',()=>place(bot, task, p, work.material, { face, properties: work.properties, exact:exactPlacement }),{cells:footprint}); }
     finally {
       bot.removeListener('blockPlaced', observe);
       // A door or bed companion is created by the server, not a second placement.
       // Capture both acknowledgements even when stop arrives on blockPlaced.
       if (placed && footprint.length > 1) {
         const deadline = Date.now() + 250;
-        const complete = () => buildCellComplete(bot, { ...p, material: work.material, properties: work.properties });
+        const complete = () => exactPlacement ? footprint.every(part => matchesBuildBlock(bot.blockAt(pos(part)),part)) : buildCellComplete(bot, { ...p, material: work.material, properties: work.properties });
         while (!complete() && Date.now() < deadline) await sleep(25);
         if (complete()) {
           goal.buildOwned ||= {};

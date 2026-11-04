@@ -72,3 +72,29 @@ test('conditional restoration scope is visible before any active goal without ex
  const f=fixture(t),permit=f.load();f.valid(false);const d=permit.describe(f.bot,f.entry.id);assert.equal(d.status,'available');assert.equal(d.scope,'conditional_operator_restoration');assert.deepEqual(d.modes,['finish','repair']);assert.equal(d.operation,'dig');assert.equal(d.cells[0].consumed,false);assert.equal(d.cells[0].expected_state_matches,true);assert.equal(permit.allows(f.bot,f.goal,f.p),false);assert.equal(JSON.stringify(d).includes(f.file),false);assert.equal(d.authorization_id,undefined);assert.equal(permit.describe(f.bot,'other'),null);
  f.valid(true);permit.claim(f.bot,f.goal,f.p);assert.equal(permit.describe(f.bot,f.entry.id).cells[0].consumed,true);f.time(1200);assert.equal(permit.describe(f.bot,f.entry.id).status,'expired');
 });
+
+test('buried exact unconsumed approved cells remain missing in construction batches',t=>{
+ const f=fixture(t),{buildCellComplete}=require('../src/build-blocks'),{remainingBuildBatch}=require('../src/build-batch'),{pendingRestoration}=require('../src/restoration-permit');f.state({name:'dirt',stateId:12,boundingBox:'block'});f.bot._restorationPermit=f.load();const cell=f.goal.blueprint.blocks[0],batch={cells:[cell]};
+ assert.equal(buildCellComplete(f.bot,cell),true);assert.equal(pendingRestoration(f.bot,f.goal,cell),true);assert.deepEqual(remainingBuildBatch(f.bot,batch,f.goal),[cell]);
+ f.valid(false);assert.equal(pendingRestoration(f.bot,f.goal,cell),false);assert.deepEqual(remainingBuildBatch(f.bot,batch,f.goal),[]);
+ f.valid(true);f.bot._restorationPermit.claim(f.bot,f.goal,f.p);assert.equal(pendingRestoration(f.bot,f.goal,cell),false);
+});
+test('buried approved cell remains work through observed air to ordinary Survival placement',async t=>{
+ const f=fixture(t),{remainingBuildBatch}=require('../src/build-batch'),{restorationIncomplete}=require('../src/restoration-permit'),{place}=require('../src/work');let material='dirt',stateId=12;
+ f.bot.blockAt=q=>({position:q,name:q.equals(f.p)?material:'stone',stateId:q.equals(f.p)?stateId:1,boundingBox:q.equals(f.p)&&material==='air'?'empty':'block',shapes:q.equals(f.p)&&material==='air'?[]:[[0,0,0,1,1,1]],getProperties:()=>({})});
+ Object.assign(f.bot,{health:20,food:20,oxygenLevel:20,entities:{},inventory:{items:()=>[{name:'oak_planks',count:1}]},equip:async item=>{f.bot.heldItem=item},lookAt:async()=>{},setControlState:()=>{},getControlState:()=>false,waitForTicks:async()=>{}});f.bot.entity.position=new Vec3(2.5,65,6.5);f.bot.entity.height=1.8;f.bot.entity.width=.6;
+ f.bot._client.write=()=>{};f.bot.dig=async()=>{f.bot._client.write('block_dig',{status:0,location:f.p});f.bot._client.write('block_dig',{status:2,location:f.p});material='air';stateId=0;f.bot._client.emit('block_change',{location:f.p,type:0});};
+ f.bot.placeBlock=async(ref,face)=>{assert.deepEqual(ref.position.plus(face),f.p);const old=f.bot.blockAt(f.p);material='oak_planks';stateId=15;f.bot.emit('blockPlaced',old,f.bot.blockAt(f.p));};
+ f.bot._restorationPermit=f.load();installStructureMutationGuard(f.bot,{validGoal:f.options.validGoal});const task={check(){}},cell=f.goal.blueprint.blocks[0],batch={cells:[cell]};
+ assert.deepEqual(remainingBuildBatch(f.bot,batch,f.goal),[cell]);await withBuildMutation(f.bot,task,f.goal,f.p,'dig',()=>f.bot.dig(f.bot.blockAt(f.p)));
+ assert.equal(f.bot._restorationPermit.allows(f.bot,f.goal,f.p),false);assert.equal(restorationIncomplete(f.bot,f.goal,cell),true);assert.deepEqual(remainingBuildBatch(f.bot,batch,f.goal),[cell]);
+ f.valid(false);assert.equal(restorationIncomplete(f.bot,f.goal,cell),false);f.valid(true);f.time(1200); // No new dig right; ordinary placement is independent of permit expiry.
+ await withBuildMutation(f.bot,task,f.goal,f.p,'place',()=>place(f.bot,task,f.p,'oak_planks',{exact:restorationIncomplete(f.bot,f.goal,cell)}));
+ assert.equal(material,'oak_planks');assert.equal(stateId,15);assert.equal(restorationIncomplete(f.bot,f.goal,cell),false);assert.deepEqual(remainingBuildBatch(f.bot,batch,f.goal),[]);
+});
+
+test('access scaffolding reserves the material of buried pending restoration',t=>{
+ const f=fixture(t),{constructionMovement}=require('../src/construction-access');f.entry.blueprint.blocks[0].material='cobblestone';f.goal.blueprint=structuredClone(f.entry.blueprint);f.data.cells[0].desired.material='cobblestone';f.data.blueprint_sha256=blueprintFingerprint(f.entry.blueprint);f.write();f.state({name:'dirt',stateId:12,boundingBox:'block'});f.bot._restorationPermit=f.load();
+ f.bot.registry.itemsByName={dirt:{id:1},cobblestone:{id:2}};f.bot.inventory={items:()=>[{name:'cobblestone',count:1,type:2}]};f.bot.pathfinder={movements:{canDig:true,scafoldingBlocks:[1,2],exclusionAreasPlace:[]}};
+ const restore=constructionMovement(f.bot,f.goal);assert.equal(f.bot.pathfinder.movements.countScaffoldingItems(),0);assert.equal(f.bot.pathfinder.movements.getScaffoldingItem(),null);restore();assert.equal(f.bot.pathfinder.movements.canDig,true);
+});

@@ -44,6 +44,15 @@ function readRestorationAuthorization(filename,{worldId,sessionId,validGoal,cons
    return {scope:'conditional_operator_restoration',meaning:'These are narrow exceptions for unexpected blocks, not the complete set of modifiable cells. Ordinary ownership-based building and editing permissions remain unchanged; all dispatch checks still apply.',status,build_id:data.build_id,dimension:data.dimension,operation:'dig',modes:['finish','repair'],expires_at:data.expires_at,
     cells:data.cells.map(c=>{const observed=bot.blockAt(new Vec3(c.position.x,c.position.y,c.position.z));return {position:point(c.position),expected:{...c.expected},desired:structuredClone(c.desired),consumed:fs.existsSync(marker(c)),expected_state_matches:observed?observed.name===c.expected.material&&observed.stateId===c.expected.state_id:null};})};
   },
+  // A spent exception never authorizes another dig. An observed empty cell
+  // may still receive its already registered material through ordinary placement.
+  needsPlacement(bot,goal,p){
+   try{
+    if(!validGoal?.(goal)||goal?.kind!=='build'||!['finish','repair'].includes(goal.continueBuild?.mode)||goal.continueBuild.id!==data.build_id||goal.buildId!==data.build_id||String(bot.game?.dimension||'').replace(/^minecraft:/,'')!==data.dimension)return false;
+    const entry=bot.buildRegistry?.find(data.build_id),c=data.cells.find(c=>key(c.position)===key(p)),desired=entry?.blueprint?.blocks?.find(c=>key(c)===key(p));
+    return !!(c&&desired&&entry.from===goal.from&&String(entry.dimension).replace(/^minecraft:/,'')===data.dimension&&blueprintFingerprint(entry.blueprint)===data.blueprint_sha256&&blueprintFingerprint(goal.blueprint)===data.blueprint_sha256&&JSON.stringify(sorted(c.desired))===JSON.stringify(sorted({material:desired.material,properties:desired.properties||{}}))&&fs.existsSync(marker(c))&&['air','cave_air','void_air'].includes(bot.blockAt(p)?.name));
+   }catch{return false;}
+  },
   allows:(bot,goal,p,token)=>!!matches(bot,goal,p,token),
   claim(bot,goal,p,token){
    const c=matches(bot,goal,p,token);if(!c)throw new Error('Restoration permission no longer matches');if(token)return token;
@@ -59,4 +68,13 @@ function readRestorationAuthorization(filename,{worldId,sessionId,validGoal,cons
  };
 }
 function loadRestorationAuthorization(...args){try{return readRestorationAuthorization(...args);}catch{throw new Error('Restoration authorization unavailable, invalid or unapproved');}}
-module.exports={blueprintFingerprint,loadRestorationAuthorization};
+function pendingRestoration(bot,goal,cell){
+ if(!bot._restorationPermit)return false;
+ const {buildFootprint,matchesBuildBlock}=require('./build-blocks');
+ return buildFootprint(cell).some(part=>{const p=new Vec3(part.x,part.y,part.z);return !matchesBuildBlock(bot.blockAt(p),part)&&bot._restorationPermit.allows(bot,goal,p);});
+}
+function restorationIncomplete(bot,goal,cell){
+ if(pendingRestoration(bot,goal,cell))return true;
+ return !!bot._restorationPermit&&require('./build-blocks').buildFootprint(cell).some(p=>bot._restorationPermit.needsPlacement(bot,goal,new Vec3(p.x,p.y,p.z)));
+}
+module.exports={blueprintFingerprint,loadRestorationAuthorization,pendingRestoration,restorationIncomplete};

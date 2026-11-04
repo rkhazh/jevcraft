@@ -3,8 +3,8 @@ const { Vec3 } = require('vec3');
 const { buildCellComplete, buildFootprint } = require('./build-blocks');
 const { isDoor } = require('./doors');
 const Heap = require('mineflayer-pathfinder/lib/heap');
-function remainingBuildBatch(bot, batch) {
-  return batch.cells.filter(p => !p.companion && !buildCellComplete(bot, p));
+function remainingBuildBatch(bot, batch, goal) {
+  return batch.cells.filter(p => !p.companion && (!buildCellComplete(bot, p) || require('./restoration-permit').restorationIncomplete(bot,goal,p)));
 }
 function materialCounts(cells) {
   return Object.entries(cells.filter(p => !p.companion).reduce((counts, p) => { counts[p.material] = (counts[p.material] || 0) + 1; return counts; }, {}))
