@@ -131,6 +131,15 @@ function buildVerification(bot,goal) {
 }
 function verifyBuild(bot,goal){return buildVerification(bot,goal).verified;}
 function capabilities(bot,enabled){return {...LIMITS,enabled,modes:enabled?['fresh','finish','repair','edit']:[],allowed_blocks:enabled&&bot.registry?.blocksArray?buildPalette(bot.registry).slice(0,512):[]};}
+function designAdaptation(blueprint) {
+ // Verification covers the selected, terrain-adjusted blueprint. Its source
+ // schematic can still contain requested cells omitted to preserve others.
+ // Older selectors omitted `preserved` on zero; absence cannot prove zero.
+ const result={scope:'selected_blueprint_preservation',status:'unknown',preserved_cell_count:null,preserved_cells:[]};
+ const cells=blueprint?.preserved;
+ if(!Array.isArray(cells)||cells.length>14000||!cells.every(p=>p&&['x','y','z'].every(k=>Number.isInteger(p[k])&&Math.abs(p[k])<=30000000)))return result;
+ return {...result,status:'recorded',preserved_cell_count:cells.length,preserved_cells:cells.slice(0,5).map(({x,y,z})=>({x,y,z}))};
+}
 function describeBuilds(bot) {
  const entries=(bot.buildRegistry?.all(bot.game?.dimension)||[]).filter(e=>e.from?.startsWith('persona:')).slice(-4).reverse();
  // Bound aggregate world reads: footprint expansion is at most two cells and
@@ -142,6 +151,7 @@ function describeBuilds(bot) {
   const verification=checked?buildVerification(bot,{blueprint:entry.blueprint}):null;
   if(checked)readBudget-=cost;
   return {id:entry.id,name:entry.name,status:entry.status==='complete'&&!entry.personaVerifiedAt?'complete_unverified':entry.status,status_scope:'historical',
+   design_adaptation:designAdaptation(entry.blueprint),
    verified:verification?.verified===true,verification,verification_scope:checked?'current_loaded_world':'not_checked_budget',
    last_verified_at:entry.personaVerifiedAt||null,last_verification:entry.personaVerification||null,
    origin:entry.origin,site_center:siteCenter(entry.origin,entry.design?.source?.size),bounds:entry.bounds,

@@ -85,7 +85,7 @@ test('site selector filters invalid floor before scoring and accepts wide center
  const binding={position:{x:0,y:65,z:0},dimension:'overworld',radius:10},small=validateSchematic(schematic(),registry);
  const bot=makeBot((x,z)=>x>=-2&&x<=2&&z>=-2&&z<=2?59:64);
  const first=selectSchematicSite(bot,small,{anchor:binding.position});assert.equal(first.origin.y,59);
- const filtered=selectSchematicSite(bot,small,{anchor:binding.position,acceptOrigin:p=>siteAllowed(binding,p,small.source.size)});assert.ok(filtered);assert.equal(filtered.origin.y,64);
+ const filtered=selectSchematicSite(bot,small,{anchor:binding.position,acceptOrigin:p=>siteAllowed(binding,p,small.source.size)});assert.ok(filtered);assert.equal(filtered.origin.y,64);assert.deepEqual(filtered.preserved,[]);
  const wideSource={...schematic(),size:[20,2,20],regions:[{from:[0,0,0],to:[19,0,19],block:'oak_planks',properties:null}]},wide=validateSchematic(wideSource,registry),tight={...binding,radius:1};
  const site=selectSchematicSite(makeBot(()=>64),wide,{anchor:tight.position,acceptOrigin:p=>siteAllowed(tight,p,wide.source.size)});assert.ok(site);assert.deepEqual(site.origin,{x:-10,y:64,z:-10});assert.equal(siteAllowed(tight,site.origin,wide.source.size),true);
 });
@@ -105,4 +105,11 @@ test('snapshot build verification has a shared bounded read budget',()=>{
  entry.blueprint.blocks=Array.from({length:200},(_,x)=>({x,y:64,z:0,material:'oak_planks'}));
  bot.buildRegistry.all=()=>[entry,{...entry,id:'newest'}];
  const descriptions=describeBuilds(bot);assert.equal(reads,200);assert.equal(descriptions[0].verification_scope,'current_loaded_world');assert.equal(descriptions[1].verification_scope,'not_checked_budget');
+});
+test('snapshot exposes bounded recorded plan preservation without claiming source geometry verification',()=>{
+ const {bot,entries}=fixture();const entry={id:'adapted',from:'persona:p',origin:{x:0,y:65,z:0},blueprint:{blocks:[],empty:[],preserved:Array.from({length:8},(_,x)=>({x,y:65,z:0,private:'omit'}))}};entries.push(entry);
+ let adaptation=describeBuilds(bot)[0].design_adaptation;
+ assert.equal(adaptation.scope,'selected_blueprint_preservation');assert.equal(adaptation.status,'recorded');assert.equal(adaptation.preserved_cell_count,8);assert.equal(adaptation.preserved_cells.length,5);assert.deepEqual(adaptation.preserved_cells[0],{x:0,y:65,z:0});
+ entry.blueprint.preserved=[];adaptation=describeBuilds(bot)[0].design_adaptation;assert.equal(adaptation.preserved_cell_count,0);assert.equal(adaptation.status,'recorded');
+ for(const blueprint of [undefined,{}, {preserved:null},{preserved:[{x:NaN,y:0,z:0}]},{preserved:[{x:1.5,y:0,z:0}]}]){entry.blueprint=blueprint;adaptation=describeBuilds(bot)[0].design_adaptation;assert.equal(adaptation.status,'unknown');assert.equal(adaptation.preserved_cell_count,null);assert.deepEqual(adaptation.preserved_cells,[]);}
 });

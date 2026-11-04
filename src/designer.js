@@ -479,7 +479,7 @@ function selectSchematicSite(bot, schematic, { anchor, prefer, owned = new Set()
       if (b && !['air', 'cave_air', 'void_air'].includes(b.name)) { initialBlocks[key(p)] = b.stateId ?? b.name; initialNames[key(p)] = b.name; }
     }
     const site = { origin: { ...origin }, blocks, empty, entrance: { ...entrance }, initialBlocks, initialNames,
-      ...(preserved.length ? { preserved } : {}),
+      preserved,
       bounds: { min: { x: origin.x, y: baseY - SITE.step, z: origin.z }, max: { x: origin.x + width - 1, y: baseY + height - 1, z: origin.z + depth - 1 } } };
     // Prefer a site that disturbs least: no preserved player blocks, then the
     // shallowest foundation, then closest to what the player asked for.
