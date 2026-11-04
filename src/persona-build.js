@@ -1,7 +1,7 @@
 'use strict';
 const {Vec3}=require('vec3');
 const {validateSchematic,buildPalette}=require('./designer');
-const {matchesBuildBlock,buildFootprint,matchesOwnership}=require('./build-blocks');
+const {matchesBuildBlock,buildFootprint,matchesOwnership,unchangedOriginalFoundation,personaBuildCellStatus}=require('./build-blocks');
 const LIMITS=Object.freeze({max_blocks:1024,max_size:[24,16,24],max_regions:64});
 const dimension=value=>String(value||'').replace(/^minecraft:/,'');
 function fail(message){const code=({'building disabled':'building_disabled','unknown or unowned structure':'build_not_owned','structure out of reach':'build_out_of_range','structure changed by another builder':'build_structure_changed','edit needs loaded structure blocks':'build_chunks_unloaded'})[message]||'build_policy_rejected';throw Object.assign(new Error(`Persona build: ${message}`),{name:'PersonaBuildPolicy',code});}
@@ -58,6 +58,7 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
   return {...base,buildOwned:structuredClone(entry.buildOwned||{}),continueBuild:{id:entry.id,mode:spec.mode}};
  }
  if(!['fresh','edit'].includes(spec.mode))fail('unsupported mode');
+ if(spec.mode==='edit'&&entry?.buildAccess)fail('finish pending local access restoration before editing');
  const design=validate(spec.schematic,bot.registry);
  if(spec.mode==='fresh'){
   if(spec.build_id!==null||design.existingOffset!==null)fail('fresh structure cannot replace existing work');
@@ -66,20 +67,6 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  if(!design.existingOffset)fail('edit must align existing structure');
  if(!base.personaBuildReturn)verifiedEditOwnership(bot,entry);
  return {...base,design,buildId:entry.id,buildAnchor:{...entry.origin},buildContinuation:{mode:'edit',target:entry.id,name:entry.name,placement:'beside_target'}};
-}
-// Retention is evidence of unchanged original terrain, never permission to
-// substitute an arbitrary block or to skip visible/oriented construction.
-function unchangedOriginalFoundation(bp,cell,block) {
- const key=`${cell.x},${cell.y},${cell.z}`;
- if(!Number.isFinite(bp.origin?.y)||cell.y>bp.origin.y||Object.keys(cell.properties||{}).length||/_bed$|_door$/.test(cell.material))return false;
- if(!block||! /^(dirt|grass_block|coarse_dirt|rooted_dirt|podzol|stone|deepslate|granite|diorite|andesite|tuff|sandstone|red_sandstone|terracotta)$/.test(block.name))return false;
- if(bp.initialNames?.[key]!==block.name||bp.initialBlocks?.[key]===undefined||bp.initialBlocks[key] !== (block.stateId??block.name))return false;
- return true;
-}
-function retainedOriginalFoundation(bot,bp,cell,block) {
- if(!unchangedOriginalFoundation(bp,cell,block))return false;
- const origin=new Vec3(cell.x,cell.y,cell.z);
- return [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].every(([x,y,z])=>bot.blockAt(origin.offset(x,y,z))?.boundingBox==='block');
 }
 function verifiedEditOwnership(bot,entry) {
  const owned=new Set();
@@ -115,9 +102,10 @@ function buildVerification(bot,goal) {
   const cells=[...new Map(bp.blocks.flatMap(buildFootprint).map(cell=>[`${cell.x},${cell.y},${cell.z}`,cell])).values()];
   for(const cell of cells){
    const block=bot.blockAt(new Vec3(cell.x,cell.y,cell.z));
-   if(!block){report.unknown_blocks++;sample(cell,cell.material,'unloaded');}
-   else if(matchesBuildBlock(block,cell))report.matched_blocks++;
-   else if(retainedOriginalFoundation(bot,bp,cell,block)){report.retained_blocks++;if(report.retained_enclosed_natural.length<8)report.retained_enclosed_natural.push({position:{x:cell.x,y:cell.y,z:cell.z},requested:cell.material,observed:block.name});}
+   const status=personaBuildCellStatus(bot,goal,cell,block);
+   if(status==='unknown'){report.unknown_blocks++;sample(cell,cell.material,'unloaded');}
+   else if(status==='matched')report.matched_blocks++;
+   else if(status==='retained'){report.retained_blocks++;if(report.retained_enclosed_natural.length<8)report.retained_enclosed_natural.push({position:{x:cell.x,y:cell.y,z:cell.z},requested:cell.material,observed:block.name});}
    else{report.mismatched_blocks++;sample(cell,cell.material,String(block.name).slice(0,64));}
   }
   for(const p of bp.empty||[]){const block=bot.blockAt(new Vec3(p.x,p.y,p.z));
@@ -148,9 +136,10 @@ function describeBuilds(bot) {
  return entries.map((entry,index)=>{
   const cost=(entry.blueprint?.blocks?.length||0)*16+(entry.blueprint?.empty?.length||0);
   const checked=cost>0&&cost<=readBudget;
-  const verification=checked?buildVerification(bot,{blueprint:entry.blueprint}):null;
+  const verification=checked?buildVerification(bot,{buildId:entry.id,blueprint:entry.blueprint}):null;
   if(checked)readBudget-=cost;
   return {id:entry.id,name:entry.name,status:entry.status==='complete'&&!entry.personaVerifiedAt?'complete_unverified':entry.status,status_scope:'historical',
+   ...(entry.persona_source?{persona_source:structuredClone(entry.persona_source)}:{}),
    design_adaptation:designAdaptation(entry.blueprint),
    restoration_authorization:bot._restorationPermit?.describe(bot,entry.id)||null,
    verified:verification?.verified===true,verification,verification_scope:checked?'current_loaded_world':'not_checked_budget',

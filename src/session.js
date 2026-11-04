@@ -748,6 +748,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       try { await require('./lava-escape').settleAfterJoin(bot, survival); saveSurvival(); }
       catch (err) { console.error('[join] reading the ground:', err.message); }
       if (ended || !bot.isAlive) return;
+      if (externalPersona) require('./restoration-permit').recordCompletionExpectation(bot);
       ready = true;
       voice?.start();
       console.log(JSON.stringify({ sessionReady: true, username: bot.username }));
@@ -843,6 +844,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       try { await Promise.race([running.promise,timeout]); }
       catch (err) { close('persona watchdog'); bot.quit('Persona cancellation watchdog'); throw err; }
       finally { clearTimeout(timer); }
+      return running.goal;
     };
     const buildApi=require('./persona-build'), buildEnabled=process.env.JEV_PERSONA_BUILD==='1';
     persona = require('./persona-admission').createPersona({

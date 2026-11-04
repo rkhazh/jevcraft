@@ -43,6 +43,8 @@ test('real session routes typed goal, rejects chat bypass, cancels without pausi
   const s=session.persona.snapshot(),p={schema_version:1,goal_id:randomUUID(),persona_id:'skipper',session_id:s.session_id,observation_id:s.observation_id,issued_at:Date.now()/1000,expires_at:Date.now()/1000+60,state:'proposed',spec:{kind:'obtain',item:'oak_log',count:8,deliver:false}};
   assert.equal((await session.persona.submit(p)).status,'accepted');await new Promise(r=>setImmediate(r));assert.equal(starts,1);
   await session.persona.cancel(p.goal_id);assert.equal(survival.state.paused,false);
+  assert.equal(session.persona.snapshot().last_result.execution.kind,'obtain');
+  assert.equal(session.persona.snapshot().last_result.verified,false);
   await new Promise(r=>setTimeout(r,550));assert.ok(idles>0,'survival idle loop resumes after scoped cancel');
   runMode='danger';const next={...p,goal_id:randomUUID(),observation_id:session.persona.snapshot().observation_id};
   assert.equal((await session.persona.submit(next)).status,'accepted');await new Promise(r=>setTimeout(r,20));

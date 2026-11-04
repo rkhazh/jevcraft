@@ -27,6 +27,25 @@ test('cancel fences old launches and cannot cancel a different goal',async()=>{
 test('lease expiry stops work locally without planner connection',async()=>{
  const f=fixture();const p=f.proposal();p.expires_at=Date.now()/1000+.04;await f.persona.submit(p);await new Promise(r=>setTimeout(r,100));assert.equal(f.persona.valid(p.goal_id),false);assert.equal(f.persona.events(0).events.at(-1).status,'expired');await f.persona.close();
 });
+test('expiry and cancellation preserve observed project identity without claiming completion',async()=>{
+ let current;
+ const f=fixture({checkBuild:()=>true,start:async spec=>{current={...spec,buildId:'registered-project',step:{action:'build_schematic',operation:'place'}};},stop:async()=>current});
+ const p={...f.proposal(),spec:{kind:'build',request:'A model-selected project',mode:'fresh',build_id:null,schematic:{}}};
+ await f.persona.submit(p);assert.equal(current.personaSessionId,p.session_id);await f.persona.cancel(p.goal_id);
+ let event=f.persona.events(0).events.at(-1);
+ assert.equal(event.status,'cancelled');assert.equal(event.verified,false);assert.equal(event.build_id,'registered-project');assert.equal(event.execution.step.operation,'place');
+ const next={...f.proposal(),spec:p.spec,expires_at:Date.now()/1000+.04};
+ await f.persona.submit(next);await new Promise(r=>setTimeout(r,100));
+ event=f.persona.events(0).events.at(-1);
+ assert.equal(event.status,'expired');assert.equal(event.build_id,'registered-project');assert.equal(event.verified,false);
+ await f.persona.close();
+});
+test('a stop result from another goal cannot bind project identity',async()=>{
+ const f=fixture({checkBuild:()=>true,stop:async()=>({personaGoalId:randomUUID(),from:'persona:skipper',kind:'build',buildId:'unrelated'})});
+ const p={...f.proposal(),spec:{kind:'build',request:'A project',mode:'fresh',build_id:null,schematic:{}}};
+ await f.persona.submit(p);await f.persona.cancel(p.goal_id);
+ assert.equal(f.persona.events(0).events.at(-1).build_id,undefined);await f.persona.close();
+});
 test('completion requires observed item count; follow cannot claim completion',async()=>{
  const f=fixture();let p=f.proposal();await f.persona.submit(p);f.persona.finish(p.goal_id,'complete');assert.equal(f.persona.events(0).events.at(-1).status,'failed');
  p=f.proposal();await f.persona.submit(p);f.body.inventory.oak_log=8;f.persona.finish(p.goal_id,'complete');assert.equal(f.persona.events(0).events.at(-1).verified,true);await f.persona.close();

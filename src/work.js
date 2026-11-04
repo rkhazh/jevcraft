@@ -4912,6 +4912,16 @@ async function designedBuildStep(bot, task, goal, save, client, onStep) {
   };
   bot.on('blockPlaced', placed);
   try { return await executeDesignedBuildStep(bot, task, goal, save, client, onStep); }
+  catch (error) {
+    if (error.personaBuildTerminal) {
+      const target = error.buildAccessTarget || goal.buildAccess?.target;
+      if (target) error.message = `${error.message} Target (${target.x}, ${target.y}, ${target.z}): ${target.material}.`;
+      goal.lastError = error.message;
+      goal.step = {action:'build_access_blocked',reason:error.message,...(target ? {position:{x:target.x,y:target.y,z:target.z},material:target.material} : {})};
+      save(); onStep?.(goal);
+    }
+    throw error;
+  }
   finally { bot.removeListener('blockPlaced', placed); }
 }
 
@@ -4968,8 +4978,9 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     goal.buildId = entry.id;
     goal.design = entry.design || goal.design;
     goal.blueprint = structuredClone(entry.blueprint);
+    if (entry.buildAccess) goal.buildAccess = structuredClone(entry.buildAccess);
     // Finishing owns nothing of the neighbours: their cells are theirs.
-    goal.buildOwned = { ...entry.buildOwned, ...bot.buildRegistry.ownership(bot, entry.blueprint.bounds, dimensionName(bot), undefined, {only:entry.id}), ...goal.buildOwned };
+    goal.buildOwned = { ...entry.buildOwned, ...(goal.personaGoalId ? {} : bot.buildRegistry.ownership(bot, entry.blueprint.bounds, dimensionName(bot), undefined, {only:entry.id})), ...goal.buildOwned };
     goal.step = { action: goal.continueBuild.mode === 'repair' ? 'repair_building' : 'finish_building', building: entry.name };
     save(); onStep(goal);
     bot.chat(goal.continueBuild.mode === 'repair' ? `I'll check ${entry.name} over and put back anything missing.`
@@ -5112,7 +5123,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     // one: the neighbours are built around, and owned they were stripped as
     // scaffolding when the new part was finished.
     if (registry) {
-      if (edited) goal.buildOwned = { ...registry.ownership(bot, goal.blueprint.bounds, dimensionName(bot), undefined, { only: edited.id }), ...goal.buildOwned };
+      if (edited) goal.buildOwned = { ...(goal.personaGoalId ? edited.buildOwned : registry.ownership(bot, goal.blueprint.bounds, dimensionName(bot), undefined, { only: edited.id })), ...goal.buildOwned };
       registry.remember(goal, { dimension: dimensionName(bot) });
     }
     save();
@@ -5137,9 +5148,18 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
   if (blueprint.terrain && !blueprint.terrain.prepared) {
     await prepareBuildTerrain(bot, task, goal, save); return false;
   }
-  const pendingRestoration = p => require('./restoration-permit').restorationIncomplete(bot,goal,p);
-  if (verifyHouse(bot, blueprint).ok && !blueprint.blocks.some(pendingRestoration) && !schematicScaffolding(bot, goal).length) return true;
-  const missing = blueprint.blocks.filter(p => !p.companion && (!buildCellComplete(bot, p) || pendingRestoration(p)));
+  const access = require('./construction-opening');
+  if (await access.continueOpening(bot, task, goal, save, {
+    choose: candidates => chooseConstructionWork(bot, task, goal, candidates),
+    execute: work => {
+      goal.step = {action:'build_schematic',operation:work.operation,material:work.material,position:{...work.position},reason:'bounded local construction access'};save();onStep(goal);
+      return executeConstructionWork(bot, task, goal, save, work);
+    },
+    acquire: (item, count) => acquireStep(bot, task, item, count, goal, save),
+  })) return false;
+  const complete = () => (goal.personaGoalId || goal.personaBuildPolicy ? require('./persona-build').buildVerification(bot,goal).verified : verifyHouse(bot, blueprint).ok) && !schematicScaffolding(bot, goal).length;
+  if (complete()) return true;
+  const missing = blueprint.blocks.filter(p => !p.companion && !require('./build-blocks').buildCellCompleteForGoal(bot,goal,p));
   const blockedParts = missing.flatMap(p => buildFootprint(p).slice(1).filter(part => !air(bot.blockAt(pos(part))) &&
     (!isDoor(bot.blockAt(pos(p))?.name) || !matchesBuildBlock(bot.blockAt(pos(part)), part))));
   const obstructions = [...new Map([...blueprint.empty.filter(p => !air(bot.blockAt(pos(p)))), ...blockedParts, ...schematicScaffolding(bot, goal)]
@@ -5212,7 +5232,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
   // finish reachable supports elsewhere in this batch before declaring a
   // lower piece inaccessible. The work-face check still enforces its state.
   if (!work) work = await chooseConstructionWork(bot, task, goal, availablePlacements.filter(p => p.position.y !== layer));
-  if (!work && missing.length && bot.game.gameMode !== 'creative' && countOf(bot, 'dirt') < 32) {
+  if (!work && !goal.personaGoalId && missing.length && bot.game.gameMode !== 'creative' && countOf(bot, 'dirt') < 32) {
     await acquireStep(bot, task, 'dirt', 32, goal, save); return false;
   }
   if (!work && !missing.length && await descendPillar(bot, task, goal, save)) return false;
@@ -5232,6 +5252,14 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
   if (!work && batch && !goal.buildBatchRechosen) {
     delete goal.buildBatch; goal.buildBatchRechosen = true; save(); return false;
   }
+  if (!work && goal.personaGoalId) {
+    // Only actual recorded placement ownership is retained for persona builds.
+    // Include placements made during this lease before considering access.
+    bot.buildRegistry?.remember(goal,{dimension:dimensionName(bot),status:'unfinished'});
+    const opening = await chooseConstructionWork(bot, task, goal, access.openingCandidates(bot,goal,missing));
+    if (opening) { access.startOpening(bot,goal,opening,save); return false; }
+    throw Object.assign(access.accessBlocked(), {buildAccessTarget:missing[0] || clearing[0]?.position});
+  }
   if (!work) throw new Blocked('I cannot reach the next part of the building yet; the design and progress are saved');
   delete goal.buildBatchRechosen;
   const p = pos(work.position);
@@ -5239,7 +5267,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     position: { ...p }, material: work.material, properties: work.properties, remainingBlocks: missing.length }; save(); onStep(goal);
   try { await executeConstructionWork(bot, task, goal, save, work); }
   finally { if (repairedAccess) { goal.buildPhase = 'cleanup'; save(); } }
-  return verifyHouse(bot, blueprint).ok && !blueprint.blocks.some(pendingRestoration) && !schematicScaffolding(bot, goal).length;
+  return complete();
 }
 
 async function executeConstructionWork(bot, task, goal, save, work) {
@@ -5247,9 +5275,15 @@ async function executeConstructionWork(bot, task, goal, save, work) {
   if (work.operation === 'dig' && Object.keys(bot.blockAt(p)?.harvestTools || {}).length && pickaxeTier(bot) < 1 && bot.game.gameMode !== 'creative') {
     await acquireStep(bot, task, 'stone_pickaxe', 1, goal, save); return;
   }
-  const face = await approachConstruction(bot, task, goal, p, work.operation, work);
+  let face;
+  try { face = await approachConstruction(bot, task, goal, p, work.operation, work); }
+  catch (error) {
+    task.check();
+    if (goal.personaGoalId && !['NeedsAir','NeedsSafety','Cancelled'].includes(error.name)) throw Object.assign(require('./construction-opening').accessBlocked('The surveyed construction approach is no longer reachable; progress is saved'),{buildAccessTarget:{...p,material:work.material}});
+    throw error;
+  }
   const footprint = buildFootprint({ ...p, material: work.material, properties: work.properties });
-  const exactPlacement = work.operation==='place' && require('./restoration-permit').restorationIncomplete(bot,goal,{...p,material:work.material,properties:work.properties});
+  const exactPlacement = work.operation==='place' && (!!goal.personaGoalId || !!goal.personaBuildPolicy || require('./restoration-permit').restorationIncomplete(bot,goal,{...p,material:work.material,properties:work.properties}));
   for (const part of footprint) if (!canClearSchematicBlock(goal.blueprint, goal.buildOwned, bot.blockAt(pos(part))) && !(work.operation==='dig'&&bot._restorationPermit?.allows(bot,goal,pos(part)))) throw new Blocked(`Building site changed at ${pos(part)}`);
   if (work.operation === 'dig') {
     // dig() first updates the local world optimistically. Keep ownership until
@@ -5259,7 +5293,7 @@ async function executeConstructionWork(bot, task, goal, save, work) {
     const changed = packet => { if (packet.location?.x === p.x && packet.location.y === p.y && packet.location.z === p.z) confirmed = packet.type === 0; };
     bot._client.on('block_change', changed);
     try {
-      await require('./structure-mutations').withBuildMutation(bot,task,goal,p,'dig',()=>dig(bot, task, p, { requireDrops: false }));
+      await require('./structure-mutations').withBuildMutation(bot,task,goal,p,'dig',()=>dig(bot, task, p, { requireDrops: false }), { validate: work.accessOpening ? () => require('./construction-opening').safeOpening(bot,goal,goal.buildAccess.opening,goal.buildAccess.expected) : undefined });
       await waitFor(task, () => confirmed && footprint.every(part => air(bot.blockAt(pos(part)))), 5000);
     } finally { bot._client.removeListener('block_change', changed); }
     for (const part of footprint) delete goal.buildOwned?.[`${part.x},${part.y},${part.z}`];
@@ -10703,7 +10737,7 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
       if (goal.stalls > 30) throw new Blocked(`No measurable progress on ${JSON.stringify(goal.step)}`);
     } catch (err) {
       task.interruptCheck = undefined;
-      if(err.personaMoveTerminal)throw err;
+      if(err.personaMoveTerminal || err.personaBuildTerminal)throw err;
       // Thrown before a layer said it had the turn: the one that was
       // running (not bot._turn, which the hunt marks before it looks).
       turnShadow?.gave(layerNow);

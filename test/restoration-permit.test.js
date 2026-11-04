@@ -76,7 +76,7 @@ test('conditional restoration scope is visible before any active goal without ex
 test('buried exact unconsumed approved cells remain missing in construction batches',t=>{
  const f=fixture(t),{buildCellComplete}=require('../src/build-blocks'),{remainingBuildBatch}=require('../src/build-batch'),{pendingRestoration}=require('../src/restoration-permit');f.state({name:'dirt',stateId:12,boundingBox:'block'});f.bot._restorationPermit=f.load();const cell=f.goal.blueprint.blocks[0],batch={cells:[cell]};
  assert.equal(buildCellComplete(f.bot,cell),true);assert.equal(pendingRestoration(f.bot,f.goal,cell),true);assert.deepEqual(remainingBuildBatch(f.bot,batch,f.goal),[cell]);
- f.valid(false);assert.equal(pendingRestoration(f.bot,f.goal,cell),false);assert.deepEqual(remainingBuildBatch(f.bot,batch,f.goal),[]);
+ f.valid(false);assert.equal(pendingRestoration(f.bot,f.goal,cell),false);assert.deepEqual(remainingBuildBatch(f.bot,batch,f.goal),[cell],'an expired permit does not make an unrecorded mismatch complete');
  f.valid(true);f.bot._restorationPermit.claim(f.bot,f.goal,f.p);assert.equal(pendingRestoration(f.bot,f.goal,cell),false);
 });
 test('buried approved cell remains work through observed air to ordinary Survival placement',async t=>{
@@ -97,4 +97,50 @@ test('access scaffolding reserves the material of buried pending restoration',t=
  const f=fixture(t),{constructionMovement}=require('../src/construction-access');f.entry.blueprint.blocks[0].material='cobblestone';f.goal.blueprint=structuredClone(f.entry.blueprint);f.data.cells[0].desired.material='cobblestone';f.data.blueprint_sha256=blueprintFingerprint(f.entry.blueprint);f.write();f.state({name:'dirt',stateId:12,boundingBox:'block'});f.bot._restorationPermit=f.load();
  f.bot.registry.itemsByName={dirt:{id:1},cobblestone:{id:2}};f.bot.inventory={items:()=>[{name:'cobblestone',count:1,type:2}]};f.bot.pathfinder={movements:{canDig:true,scafoldingBlocks:[1,2],exclusionAreasPlace:[]}};
  const restore=constructionMovement(f.bot,f.goal);assert.equal(f.bot.pathfinder.movements.countScaffoldingItems(),0);assert.equal(f.bot.pathfinder.movements.getScaffoldingItem(),null);restore();assert.equal(f.bot.pathfinder.movements.canDig,true);
+});
+
+test('approved restoration overrides retained-foundation completion until exact placement',t=>{
+ const f=fixture(t),{buildVerification}=require('../src/persona-build'),{remainingBuildBatch}=require('../src/build-batch');
+ f.entry.blueprint.initialNames={'4,65,6':'dirt'};f.entry.blueprint.initialBlocks={'4,65,6':12};f.goal.blueprint=structuredClone(f.entry.blueprint);
+ let observed={name:'dirt',stateId:12,boundingBox:'block'};
+ f.bot.blockAt=p=>({...p.equals(f.p)?observed:{name:'stone',stateId:1,boundingBox:'block'},position:p});
+ f.bot._restorationPermit=f.load();const cell=f.goal.blueprint.blocks[0];
+ assert.equal(buildVerification(f.bot,f.goal).verified,false,'authorized replacement must not be silently retained');
+ assert.deepEqual(remainingBuildBatch(f.bot,{cells:[cell]},f.goal),[cell]);
+ f.bot._restorationPermit.claim(f.bot,f.goal,f.p);observed={name:'air',stateId:0,boundingBox:'empty'};
+ assert.equal(buildVerification(f.bot,f.goal).verified,false);assert.deepEqual(remainingBuildBatch(f.bot,{cells:[cell]},f.goal),[cell]);
+ observed={name:'oak_planks',stateId:15,boundingBox:'block'};
+ assert.equal(buildVerification(f.bot,f.goal).verified,true);assert.deepEqual(remainingBuildBatch(f.bot,{cells:[cell]},f.goal),[]);
+});
+
+test('snapshot restoration expectation remains exact without an active lease and after dig permission expires',t=>{
+ const f=fixture(t),{describeBuilds,buildVerification}=require('../src/persona-build');
+ f.entry.blueprint.initialNames={'4,65,6':'dirt'};f.entry.blueprint.initialBlocks={'4,65,6':12};f.goal.blueprint=structuredClone(f.entry.blueprint);
+ f.bot.blockAt=p=>({position:p,name:p.equals(f.p)?'dirt':'stone',stateId:p.equals(f.p)?12:1,boundingBox:'block'});
+ assert.equal(buildVerification(f.bot,f.goal).verified,true,'without a repair request recorded original ground may be retained');
+ f.bot._restorationPermit=f.load();
+ assert.equal(describeBuilds(f.bot)[0].verified,false,'snapshot must report the same exact expectation as active work');
+ f.valid(false);assert.equal(f.bot._restorationPermit.allows(f.bot,f.goal,f.p),false);
+ assert.equal(describeBuilds(f.bot)[0].verified,false,'no active lease grants no dig but does not complete the repair');
+ f.time(1200);assert.equal(f.bot._restorationPermit.describe(f.bot,f.entry.id).status,'expired');
+ assert.equal(describeBuilds(f.bot)[0].verified,false,'expired dig permission does not authorize retained-material success');
+ assert.equal(buildVerification(f.bot,f.goal).verified,false);
+});
+
+test('recorded restoration expectation survives registry reload without granting dig permission',t=>{
+ const f=fixture(t),{BuildRegistry}=require('../src/builds'),{recordCompletionExpectation}=require('../src/restoration-permit'),{describeBuilds}=require('../src/persona-build');
+ const file=path.join(f.dir,'builds.json');
+ f.goal.blueprint.bounds={min:{...f.p},max:{...f.p}};f.goal.blueprint.initialNames={'4,65,6':'dirt'};f.goal.blueprint.initialBlocks={'4,65,6':12};
+ f.bot.buildRegistry=new BuildRegistry(file);f.bot.buildRegistry.remember(f.goal,{dimension:'overworld'});
+ f.bot.blockAt=p=>({position:p,name:p.equals(f.p)?'dirt':'stone',stateId:p.equals(f.p)?12:1,boundingBox:'block'});
+ f.bot._restorationPermit=f.load();recordCompletionExpectation(f.bot);
+ const saved=f.bot.buildRegistry.find(f.goal.buildId).blueprint;
+ assert.deepEqual(saved.exactMaterialCells,[{x:4,y:65,z:6}]);
+ assert.equal(blueprintFingerprint(saved),f.data.blueprint_sha256,'completion metadata grants no broader mutation scope');
+ f.goal.blueprint=structuredClone(saved);f.bot.buildRegistry.remember(f.goal,{dimension:'overworld'});
+ delete f.bot._restorationPermit;f.bot.buildRegistry=new BuildRegistry(file);
+ assert.equal(describeBuilds(f.bot)[0].verified,false);
+ assert.equal(require('../src/restoration-permit').pendingRestoration(f.bot,f.goal,f.p),false,'completion metadata is not dig authority');
+ f.bot.blockAt=p=>({position:p,name:p.equals(f.p)?'oak_planks':'stone',stateId:p.equals(f.p)?15:1,boundingBox:'block'});
+ assert.equal(describeBuilds(f.bot)[0].verified,true);
 });

@@ -84,6 +84,45 @@ function buildCellComplete(bot, cell) {
   return parts.every(p => enclosedCell(bot, p));
 }
 
+// Persona work and its final report share this stricter completion contract.
+// An inaccessible cell is still work unless it is explicitly recorded original
+// natural foundation, unchanged and enclosed. Ordinary upstream builds retain
+// their existing enclosed-cell behavior above.
+function unchangedOriginalFoundation(blueprint = {}, cell, block) {
+  const key = `${cell.x},${cell.y},${cell.z}`;
+  if (!Number.isFinite(blueprint.origin?.y) || cell.y > blueprint.origin.y || Object.keys(cell.properties || {}).length || /_bed$|_door$/.test(cell.material)) return false;
+  if (!block || !/^(dirt|grass_block|coarse_dirt|rooted_dirt|podzol|stone|deepslate|granite|diorite|andesite|tuff|sandstone|red_sandstone|terracotta)$/.test(block.name)) return false;
+  return blueprint.initialNames?.[key] === block.name && blueprint.initialBlocks?.[key] !== undefined &&
+    blueprint.initialBlocks[key] === (block.stateId ?? block.name);
+}
+
+function retainedOriginalFoundation(bot, blueprint, cell, block) {
+  if (!unchangedOriginalFoundation(blueprint, cell, block)) return false;
+  const p = new Vec3(cell.x, cell.y, cell.z);
+  return directions.every(face => bot.blockAt(p.plus(face))?.boundingBox === 'block');
+}
+
+function personaBuildCellStatus(bot, goal, cell, block = bot.blockAt(new Vec3(cell.x, cell.y, cell.z))) {
+  if (!block) return 'unknown';
+  if (matchesBuildBlock(block, cell)) return 'matched';
+  // An approved replacement stays outstanding through the dig and placement;
+  // retaining its original foundation would silently undo the repair request.
+  if (!require('./restoration-permit').restorationRequiresExact(bot, goal, cell) &&
+      retainedOriginalFoundation(bot, goal?.blueprint, cell, block)) return 'retained';
+  return 'mismatched';
+}
+
+function buildCellCompleteForGoal(bot, goal, cell) {
+  if (!goal?.personaBuildPolicy && !goal?.personaGoalId) {
+    return buildCellComplete(bot, cell) && !require('./restoration-permit').restorationIncomplete(bot, goal, cell);
+  }
+  if (isBed(cell.material) && cell.properties?.part === 'head') {
+    const [dx, dz] = bedDirections[cell.properties.facing];
+    return buildCellCompleteForGoal(bot, goal, { ...cell, x: cell.x - dx, z: cell.z - dz, companion: false, properties: { ...cell.properties, part: 'foot' } });
+  }
+  return buildFootprint(cell).every(part => ['matched', 'retained'].includes(personaBuildCellStatus(bot, goal, part)));
+}
+
 function blockOwnership(block) {
   if (isBed(block.name)) {
     const p = block.getProperties?.() || {};
@@ -131,4 +170,4 @@ function placementGoal(bot, point, cell = {}) {
   return goal;
 }
 
-module.exports = { isBed, bedPairMatches, regionProperties, matchesBuildBlock, placementGoal, buildFootprint, buildCellComplete, enclosedCell, blockOwnership, matchesOwnership };
+module.exports = { isBed, bedPairMatches, regionProperties, matchesBuildBlock, placementGoal, buildFootprint, buildCellComplete, buildCellCompleteForGoal, personaBuildCellStatus, unchangedOriginalFoundation, retainedOriginalFoundation, enclosedCell, blockOwnership, matchesOwnership };

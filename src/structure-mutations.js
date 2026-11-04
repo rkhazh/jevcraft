@@ -36,6 +36,7 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
   const permit=permits.getStore();
   if(!permit||!permit.active||permit.bot!==bot||permit.operation!==operation||permit.cell!==key(p)||!validGoal(permit.goal))return null;
   permit.task.check();
+  if(permit.validate&&!permit.validate())return null;
   // Admission is not an enduring right to clear a later human replacement.
   if(!cells.every(cell=>permit.cells.has(key(cell))&&(require('./designer').canClearSchematicBlock(permit.goal.blueprint,permit.goal.buildOwned,bot.blockAt(cell))||operation==='dig'&&bot._restorationPermit?.allows(bot,permit.goal,cell,permit.restorations.get(key(cell))))))return null;
   return permit;
@@ -107,11 +108,11 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
   };
  }
 }
-async function withBuildMutation(bot,task,goal,p,operation,run,{cells}={}){
+async function withBuildMutation(bot,task,goal,p,operation,run,{cells,validate}={}){
  if(!bot._registeredStructureProtection)return run();
  if(goal?.kind!=='build'||!goal.blueprint||!bot._structureMutationPermitValid?.(goal))throw new Error('Validated current build goal required for mutation permit');
  const footprint=operation==='dig'?mutationCells(bot,operation,p):cells||[p];
- const permit={bot,task,goal,cell:key(p),cells:new Set(footprint.map(key)),restorations:new Map(),operation,active:true};
+ const permit={bot,task,goal,cell:key(p),cells:new Set(footprint.map(key)),restorations:new Map(),operation,validate,active:true};
  try{return await permits.run(permit,run);}finally{permit.active=false;}
 }
 function routeMutatesStructure(bot,move){

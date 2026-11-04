@@ -32,7 +32,23 @@ function readRestorationAuthorization(filename,{worldId,sessionId,validGoal,cons
    return c;
   }catch{return null;}
  };
+ // Desired world state is independent of whether digging is currently allowed.
+ // This lookup grants no mutation and remains meaningful after lease/permit expiry.
+ const requiresExact=(bot,buildId,blueprint,p)=>{
+  try{
+   if(buildId!==data.build_id||String(bot.game?.dimension||'').replace(/^minecraft:/,'')!==data.dimension)return false;
+   const c=data.cells.find(c=>key(c.position)===key(p));if(!c)return false;
+   const entry=bot.buildRegistry?.find(buildId),desired=blueprint?.blocks?.find(c=>key(c)===key(p));
+   return !!(entry&&desired&&String(entry.dimension).replace(/^minecraft:/,'')===data.dimension&&blueprintFingerprint(entry.blueprint)===data.blueprint_sha256&&blueprintFingerprint(blueprint)===data.blueprint_sha256&&JSON.stringify(sorted(c.desired))===JSON.stringify(sorted({material:desired.material,properties:desired.properties||{}})));
+  }catch{return false;}
+ };
  return {
+  requiresExact,
+  completionExpectation(bot){
+   const entry=bot.buildRegistry?.find(data.build_id);
+   const cells=data.cells.filter(c=>requiresExact(bot,data.build_id,entry?.blueprint,c.position)).map(c=>point(c.position));
+   return cells.length?{build_id:data.build_id,cells}:null;
+  },
   describe(bot,buildId){
    if(buildId!==data.build_id)return null;
    // Observation is conditional operator authority, not a lease or a mutation
@@ -68,6 +84,16 @@ function readRestorationAuthorization(filename,{worldId,sessionId,validGoal,cons
  };
 }
 function loadRestorationAuthorization(...args){try{return readRestorationAuthorization(...args);}catch{throw new Error('Restoration authorization unavailable, invalid or unapproved');}}
+function recordCompletionExpectation(bot){
+ const expectation=bot._restorationPermit?.completionExpectation(bot);if(!expectation)return;
+ const entry=bot.buildRegistry.find(expectation.build_id);
+ entry.blueprint.exactMaterialCells=[...new Map([...(entry.blueprint.exactMaterialCells||[]),...expectation.cells].map(p=>[key(p),point(p)])).values()];
+ bot.buildRegistry.flush?.();
+}
+function restorationRequiresExact(bot,goal,cell){
+ return !!goal?.blueprint?.exactMaterialCells?.some(p=>key(p)===key(cell))||
+  !!bot._restorationPermit?.requiresExact?.(bot,goal?.buildId,goal?.blueprint,cell);
+}
 function pendingRestoration(bot,goal,cell){
  if(!bot._restorationPermit)return false;
  const {buildFootprint,matchesBuildBlock}=require('./build-blocks');
@@ -77,4 +103,4 @@ function restorationIncomplete(bot,goal,cell){
  if(pendingRestoration(bot,goal,cell))return true;
  return !!bot._restorationPermit&&require('./build-blocks').buildFootprint(cell).some(p=>bot._restorationPermit.needsPlacement(bot,goal,new Vec3(p.x,p.y,p.z)));
 }
-module.exports={blueprintFingerprint,loadRestorationAuthorization,pendingRestoration,restorationIncomplete};
+module.exports={blueprintFingerprint,loadRestorationAuthorization,recordCompletionExpectation,restorationRequiresExact,pendingRestoration,restorationIncomplete};
