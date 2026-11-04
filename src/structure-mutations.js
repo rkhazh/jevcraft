@@ -37,7 +37,7 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
   if(!permit||!permit.active||permit.bot!==bot||permit.operation!==operation||permit.cell!==key(p)||!validGoal(permit.goal))return null;
   permit.task.check();
   // Admission is not an enduring right to clear a later human replacement.
-  if(!cells.every(cell=>permit.cells.has(key(cell))&&require('./designer').canClearSchematicBlock(permit.goal.blueprint,permit.goal.buildOwned,bot.blockAt(cell))))return null;
+  if(!cells.every(cell=>permit.cells.has(key(cell))&&(require('./designer').canClearSchematicBlock(permit.goal.blueprint,permit.goal.buildOwned,bot.blockAt(cell))||operation==='dig'&&bot._restorationPermit?.allows(bot,permit.goal,cell,permit.restorations.get(key(cell))))))return null;
   return permit;
  }
  function suffocationEscape(operation,p){
@@ -61,6 +61,15 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
    if(operation==='place'&&packet.hand===1)throw refuse(operation,p);
    const cells=mutationCells(bot,operation,p),permit=permitFor(operation,p,cells);
    if(scope?.permit&&!permit||cells.some(protectedAt)&&!permit&&!suffocationEscape(operation,p))error=refuse(operation,p);
+   if(!error&&permit&&operation==='dig'){
+    const restore=cells.filter(cell=>!require('./designer').canClearSchematicBlock(permit.goal.blueprint,permit.goal.buildOwned,bot.blockAt(cell)));
+    if(restore.length){
+     if(!scope||packet.status===0&&(scope.restorationStarted||permit.restorations.size)||packet.status===2&&(!scope.restorationStarted||scope.restorationFinished))throw refuse(operation,p);
+     for(const cell of restore){const token=permit.restorations.get(key(cell));if(packet.status!==0&&!token)throw refuse(operation,p);permit.restorations.set(key(cell),bot._restorationPermit.claim(bot,permit.goal,cell,token));}
+     scope.restorationStarted=true;if(packet.status===2)scope.restorationFinished=true;
+    }
+    if(!permitFor(operation,p,cells))error=refuse(operation,p);
+   }
   }catch(err){error=err;}
   if(error){
    audit({operation,position:{x:p.x,y:p.y,z:p.z},status:'dispatch_refused',reason:'registered_structure_or_expired_permit'});
@@ -102,7 +111,7 @@ async function withBuildMutation(bot,task,goal,p,operation,run,{cells}={}){
  if(!bot._registeredStructureProtection)return run();
  if(goal?.kind!=='build'||!goal.blueprint||!bot._structureMutationPermitValid?.(goal))throw new Error('Validated current build goal required for mutation permit');
  const footprint=operation==='dig'?mutationCells(bot,operation,p):cells||[p];
- const permit={bot,task,goal,cell:key(p),cells:new Set(footprint.map(key)),operation,active:true};
+ const permit={bot,task,goal,cell:key(p),cells:new Set(footprint.map(key)),restorations:new Map(),operation,active:true};
  try{return await permits.run(permit,run);}finally{permit.active=false;}
 }
 function routeMutatesStructure(bot,move){

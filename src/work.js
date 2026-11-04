@@ -5144,7 +5144,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     .map(p => [`${p.x},${p.y},${p.z}`, p])).values()];
   const changed = [...missing.flatMap(buildFootprint), ...obstructions].find(p => {
     const block = bot.blockAt(pos(p));
-    return block && !canClearSchematicBlock(blueprint, goal.buildOwned, block);
+    return block && !canClearSchematicBlock(blueprint, goal.buildOwned, block) && !bot._restorationPermit?.allows(bot,goal,pos(p));
   });
   if (changed) throw siteChanged(bot, pos(changed));
   // Recover our own wrongly oriented piece before gathering another copy.
@@ -5247,7 +5247,7 @@ async function executeConstructionWork(bot, task, goal, save, work) {
   }
   const face = await approachConstruction(bot, task, goal, p, work.operation, work);
   const footprint = buildFootprint({ ...p, material: work.material, properties: work.properties });
-  for (const part of footprint) if (!canClearSchematicBlock(goal.blueprint, goal.buildOwned, bot.blockAt(pos(part)))) throw new Blocked(`Building site changed at ${pos(part)}`);
+  for (const part of footprint) if (!canClearSchematicBlock(goal.blueprint, goal.buildOwned, bot.blockAt(pos(part))) && !(work.operation==='dig'&&bot._restorationPermit?.allows(bot,goal,pos(part)))) throw new Blocked(`Building site changed at ${pos(part)}`);
   if (work.operation === 'dig') {
     // dig() first updates the local world optimistically. Keep ownership until
     // the server confirms air, otherwise a rejected dig looks like a player's
