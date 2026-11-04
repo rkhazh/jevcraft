@@ -48,3 +48,13 @@ test('trusted short login alias sends fixed command once and redacts its argumen
  assert.equal(g.authenticated,false);
  b.emit('messagestr','SkipperJev joined the game','system',{},null);await g.ready;b.emit('end');
 });
+test('opt-in warp uses private sender only after authentication and keeps public commands guarded',async()=>{
+ const {Vec3}=require('vec3');const b=bot();b.entity={position:new Vec3(0,70,0)};b.isAlive=true;b.game={gameMode:'survival'};b.world={getColumnAt:()=>({})};
+ b.chat=text=>{b.sent.push(text);if(text==='/warp ai')queueMicrotask(()=>{b.entity.position=new Vec3(100,70,0);b.emit('forcedMove')})};
+ const g=communityAuth(b,config,{password:'secret',warpAi:true});
+ require('../src/commands').createCommandAccess(b,{users:[]});
+ await assert.rejects(g.beforeGameplay(),/authenticated/);assert.deepEqual(b.sent,[]);
+ b.emit('messagestr','SkipperJev joined the game','system',{},null);await g.ready;
+ await g.beforeGameplay();await g.beforeGameplay();assert.deepEqual(b.sent,['/warp ai']);
+ assert.throws(()=>b.chat('/warp other'),/fresh explicit/);b.emit('end');
+});

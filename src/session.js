@@ -732,6 +732,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       bot._client.on('set_passengers', () => { if (bot._seatedIn != null && !bot.vehicle) seated(); });
       if (authentication) await require('./community-chunks').waitForCommunityChunks(bot,{ended:()=>ended,report:event=>console.log(JSON.stringify({communityChunks:event}))});
       else await bot.waitForChunksToLoad();
+      await authentication?.beforeGameplay?.();
       if (ended || !bot.isAlive) return;
       // The ground about the bot read again before anything resumes: in
       // lava, out at once; in water beside lava, onto dry ground clear of it
