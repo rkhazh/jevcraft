@@ -211,6 +211,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // Whatever is active pays for the calls made on its behalf; with nothing
   // active, an idle bot that has a dream is still that dream's cost.
   const routed = withRun(client, () => active?.goal.ledgerRun ?? dreamStore.read()?.ledgerRun);
+  const contextual = getGoal => externalPersona ? require('./persona-context').withPersonaContext(routed,getGoal,goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId)) : routed;
   const dreamName = (key, text) => `dream · ${key === 'custom' ? text : DREAMS[key].title}`;
   // The dream's run in the ledger. A standing from before the ledger
   // existed gets one now, dated from when the dream was given.
@@ -227,7 +228,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   let launchingDream = false;
   // The old goal's copy only where it can be this world's: with a world id
   // the goal store is still per server.
-  const survival = createSurvival(bot, { state: survivalStore.read() || (memoryIdentity === identity ? store.read()?.survival : undefined), client: routed });
+  const survival = createSurvival(bot, { state: survivalStore.read() || (memoryIdentity === identity ? store.read()?.survival : undefined), client: contextual(()=>active?.goal) });
   if (!externalPersona && !survivalStore.read() && store.read()?.status === 'cancelled') survival.state.paused = true;
   if (externalPersona) survival.state.paused = false;
   const saveSurvival = () => { if (!ended) { survival.state.version = 1; survivalStore.save(survival.state); } };
@@ -285,7 +286,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     session.startedAt = Date.now(); bot._turn = null;
     active = session;
     session.promise = runGoal(bot, task, goal, workStore, {
-      decisionClient: routed, survival,
+      decisionClient: contextual(()=>goal), survival,
       onStep: g => {
         // The same step with the same last decision is written once in two seconds, not at every pass (note 2686): a
         // loop spinning twenty passes a second wrote its 30 KB status line each pass, and full-250 (25588, 2026-10-31

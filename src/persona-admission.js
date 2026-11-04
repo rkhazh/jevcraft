@@ -22,8 +22,9 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
  }
  function rejection(p,reason){const detail=typeof reason==='object'?reason.detail:undefined;reason=typeof reason==='object'?reason.reason:reason;return {status:'rejected',reason,...(detail?{detail}:{}),goal_id:p?.goal_id??null,session_id:sessionId};}
  function check(p) {
-  if(!exact(p,['schema_version','goal_id','persona_id','session_id','observation_id','issued_at','expires_at','state','spec']))return 'invalid_shape';
+  if(!exact(p,['schema_version','goal_id','persona_id','session_id','observation_id','issued_at','expires_at','state','spec',...(Object.hasOwn(p||{},'persona_context')?['persona_context']:[])]))return 'invalid_shape';
   if(p.schema_version!==1||p.state!=='proposed'||typeof p.goal_id!=='string'||!/^[0-9a-f-]{36}$/i.test(p.goal_id)||typeof p.persona_id!=='string'||!p.persona_id.length||p.persona_id.length>128)return 'invalid_envelope';
+  if(Object.hasOwn(p,'persona_context')&&!require('./persona-context').validContext(p.persona_context))return 'invalid_persona_context';
   if(closed||p.session_id!==sessionId)return 'wrong_session';
   const now=Date.now()/1000, observation=observations.get(p.observation_id);
   if(!Number.isFinite(p.issued_at)||!Number.isFinite(p.expires_at)||p.issued_at>now+1||p.expires_at<=now||p.expires_at-p.issued_at>120||p.expires_at<=p.issued_at)return 'expired';
@@ -49,7 +50,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   reason=check(p);if(reason)return rejection(p,reason);
   const current={proposal:structuredClone(p),deadline:performance.now()+(p.expires_at-Date.now()/1000)*1000};active=current;
   current.timer=setTimeout(()=>enqueue(()=>cancelNow(p.goal_id,'expired')).catch(()=>{}),Math.max(1,current.deadline-performance.now()));current.timer.unref();
-  try{await start({...p.spec,...(p.spec.kind==='come'&&rendezvous?.target===p.spec.target?{requesterPosition:{...rendezvous.position}}:{}),personaGoalId:p.goal_id,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='build'?p.spec.request:p.spec.kind==='move'?`Move locally to (${p.spec.target.x}, ${p.spec.target.y}, ${p.spec.target.z})`:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
+  try{await start({...p.spec,...(p.spec.kind==='come'&&rendezvous?.target===p.spec.target?{requesterPosition:{...rendezvous.position}}:{}),...(p.persona_context?{personaContext:structuredClone(p.persona_context)}:{}),personaGoalId:p.goal_id,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='build'?p.spec.request:p.spec.kind==='move'?`Move locally to (${p.spec.target.x}, ${p.spec.target.y}, ${p.spec.target.z})`:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
   catch(err){await cancelNow(p.goal_id,'failed');return rejection(p,'start_failed');}
   if(!valid(p.goal_id)){await cancelNow(p.goal_id,'expired');return rejection(p,'expired');}
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:p.expires_at};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
