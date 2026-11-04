@@ -1,0 +1,138 @@
+{
+  "provenance": {
+    "kind": "diagnostic_recorded_fixture",
+    "run": "20261104T214053.157744Z",
+    "survival_sha256": "86666a622fc7144104fe8ac18b5f33163629b99673ef272ccd5f5e962eeca5b0",
+    "observations_sha256": "13d93ac2e0debb3c0193a2f65c81eb19fe39759d2f7c4ccd6adc94a0a3e7d929"
+  },
+  "survival": {
+    "attempts": {
+      "food_search:stock": {
+        "action": "food_search",
+        "target": "stock",
+        "why": "five minutes of searching brought no food",
+        "at": 1793825269682,
+        "until": 1793826469682,
+        "count": 3
+      },
+      "station_cell:-530,63,-399": {
+        "action": "station_cell",
+        "target": "-530,63,-399",
+        "why": "the crafting table was refused there: Placement obstructed: a SkipperBot stands in the cell at (-530, 63, -399), and the game puts no block where a body is",
+        "at": 1793825670432,
+        "until": 1793826270432,
+        "count": 1
+      },
+      "close_on_shooter:here": {
+        "action": "close_on_shooter",
+        "target": "here",
+        "why": "three seconds without getting nearer",
+        "at": 1793828491681,
+        "until": 1793828506681,
+        "count": 1
+      },
+      "seal_here:(-536, 62, -398)": {
+        "action": "seal_here",
+        "target": "(-536, 62, -398)",
+        "why": "3 cells of the shell would not take a block",
+        "at": 1793828498654,
+        "until": 1793828558654,
+        "count": 1
+      }
+    },
+    "stanceFailed": [
+      {
+        "choice": "seal",
+        "kinds": "pillager,warden",
+        "where": {
+          "x": -536,
+          "y": 62,
+          "z": -398
+        },
+        "at": 1793828519900
+      },
+      {
+        "choice": "seal",
+        "kinds": "pillager,warden",
+        "where": {
+          "x": -536,
+          "y": 62,
+          "z": -398
+        },
+        "at": 1793828526770
+      },
+      {
+        "choice": "fight",
+        "kinds": "pillager,warden",
+        "where": {
+          "x": -536,
+          "y": 62,
+          "z": -398
+        },
+        "at": 1793828528430,
+        "why": "nothing was struck: the pillager 2.4 blocks off is 2 blocks above the feet and out of the sword's reach from where the bot stands (no clear swing at it), and the run at the pillager 2.4 blocks off found no way to it"
+      },
+      {
+        "choice": "fight",
+        "kinds": "pillager,warden",
+        "where": {
+          "x": -536,
+          "y": 62,
+          "z": -398
+        },
+        "at": 1793828530105,
+        "why": "nothing was struck: the pillager 2.4 blocks off is 2 blocks above the feet and out of the sword's reach from where the bot stands (no clear swing at it), and the run at the pillager 2.4 blocks off found no way to it"
+      }
+    ]
+  },
+  "last_execution": {
+    "status": "interrupted",
+    "goal_id": null,
+    "kind": "survive",
+    "request": "Stay nearby between admitted persona goals; react to survival needs without optional resource gathering or exploration",
+    "step": {
+      "action": "return_from_shaft",
+      "item": null,
+      "block": null,
+      "drops": null,
+      "operation": null,
+      "material": null,
+      "remainingBlocks": null,
+      "from": null,
+      "fuel": null,
+      "count": null,
+      "sources": [],
+      "target": {
+        "x": -536,
+        "y": 64,
+        "z": -398
+      },
+      "position": {
+        "x": -536,
+        "y": 64,
+        "z": -398
+      },
+      "reason": null
+    },
+    "current_turn": {
+      "holder": "survival",
+      "phase": "stance: seal",
+      "age_ms": 551,
+      "current_goal": true,
+      "fresh": true
+    },
+    "survival_action": {
+      "action": "charge",
+      "reason": null,
+      "observed_at": 1793828530.096,
+      "age_ms": 2330,
+      "fresh": true
+    },
+    "interruption": {
+      "active": true,
+      "reason": "stance: seal",
+      "last_error": null
+    },
+    "build_progress": null
+  }
+}
