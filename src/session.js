@@ -50,7 +50,7 @@ function unworkable(bot, spec) {
 }
 
 function createSession(config, client, { stateDirectory = path.join(__dirname, '..', '.bot-state'), recorder,
-  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null } = {}) {
+  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false } = {}) {
   const externalPersona = process.env.JEV_PERSONA_MODE === '1';
   let persona = null;
   let ended = false, spawned = false, resolveClosed;
@@ -843,7 +843,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     };
     const buildApi=require('./persona-build'), buildEnabled=process.env.JEV_PERSONA_BUILD==='1';
     persona = require('./persona-admission').createPersona({
-      rendezvous, items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
+      rendezvous, allowVisiblePlayers:personaVisiblePlayers, items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
         execution:require('./persona-execution').executionSnapshot(bot,active),
         build_capabilities:buildApi.capabilities(bot,buildEnabled),builds:buildApi.describeBuilds(bot),

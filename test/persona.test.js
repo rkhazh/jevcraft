@@ -94,3 +94,9 @@ test('operator rendezvous input has bounded finite coordinates and Java player n
  assert.equal(validateRendezvous(null),null);
  for(const bad of [{...good,target:'/op'},{...good,dimension:'the_nether'},{...good,position:{x:NaN,y:64,z:2}},{...good,position:{x:1,y:400,z:2}}])assert.throws(()=>validateRendezvous(bad));
 });
+test('community opt-in permits only currently visible authoritative roster players without operator grants',async()=>{
+ const f=fixture({players:[],allowVisiblePlayers:true});f.body.player_identities=[{name:'Alex',uuid:'11111111-1111-4111-8111-111111111111'}];
+ for(const kind of ['come','follow'])assert.equal((await f.persona.submit({...f.proposal(),spec:{kind,target:'Alex'}})).status,'accepted');
+ f.body.players=[];assert.equal((await f.persona.submit({...f.proposal(),spec:{kind:'come',target:'Alex'}})).status,'rejected');f.body.players=['Alex'];f.body.player_identities=[];assert.equal((await f.persona.submit({...f.proposal(),spec:{kind:'come',target:'Alex'}})).status,'rejected');await f.persona.close();
+ const closed=fixture({players:[]});closed.body.player_identities=[{name:'Alex',uuid:'11111111-1111-4111-8111-111111111111'}];assert.equal((await closed.persona.submit({...closed.proposal(),spec:{kind:'come',target:'Alex'}})).status,'rejected');await closed.persona.close();
+});
