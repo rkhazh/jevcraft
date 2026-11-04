@@ -6,13 +6,13 @@ const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v
 function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false}) {
  rendezvous=require('./persona-rendezvous').validateRendezvous(rendezvous);
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
- let active=null, sequence=0, closed=false, serial=Promise.resolve();
+ let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve();
  const enqueue=fn=>{const p=serial.then(fn);serial=p.catch(()=>{});return p};
- function emit(data) { const event={...data,event_id:randomUUID(),session_id:sessionId,sequence:++sequence,observed_at:Date.now()/1000}; log.push(event);if(log.length>1000)log.shift();return event; }
+ function emit(data) { const event={...data,event_id:randomUUID(),session_id:sessionId,sequence:++sequence,observed_at:Date.now()/1000}; if(data.type==='goal'&&['complete','blocked','failed','expired','cancelled'].includes(data.status))lastResult=structuredClone(event); log.push(event);if(log.length>1000)log.shift();return event; }
  function snapshot() {
   const state=read(), id=randomUUID(), now=Date.now()/1000;
   observations.set(id,{at:now,mono:performance.now()});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
-  return {...state,movement_capabilities:{allow_visible_players:allowVisiblePlayers},rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
+  return {...state,last_result:lastResult?structuredClone(lastResult):null,movement_capabilities:{allow_visible_players:allowVisiblePlayers},rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
  }
  function valid(id) {return !closed && active?.proposal.goal_id===id && active.deadline>performance.now();}
  async function cancelNow(id, status='cancelled') {
@@ -81,7 +81,10 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
     if(!verified)status='failed';
    }
    if(!['complete','blocked','failed'].includes(status))return;
-   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,...(goal?.buildId?{build_id:goal.buildId}:{}),...(goal?.personaBuildVerification?{build_verification:goal.personaBuildVerification}:{}),summary:verified?(s.kind==='build'?(goal.personaBuildVerification?.retained_blocks?`Verified structure ${goal.buildId} with ${goal.personaBuildVerification.retained_blocks} observed retained enclosed original natural foundation cells; not an exact material match`:`Verified all planned structure blocks and clear cells for ${goal.buildId}`):s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}`});
+   const {normalizeStep,safeText}=require('./persona-execution');
+   const reason=safeText(goal?.lastError||goal?.step?.problem||goal?.step?.reason);
+   const execution={kind:s.kind,request:safeText(goal?.request||s.request),step:normalizeStep(goal?.step||{})};
+   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,reason,execution,...(goal?.buildId?{build_id:goal.buildId}:{}),...(goal?.personaBuildVerification?{build_verification:goal.personaBuildVerification}:{}),summary:verified?(s.kind==='build'?(goal.personaBuildVerification?.retained_blocks?`Verified structure ${goal.buildId} with ${goal.personaBuildVerification.retained_blocks} observed retained enclosed original natural foundation cells; not an exact material match`:`Verified all planned structure blocks and clear cells for ${goal.buildId}`):s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}${reason?`: ${reason}`:""}`});
   },
   close:()=>{closed=true;return enqueue(async()=>{if(active)await cancelNow(active.proposal.goal_id,'cancelled');});},
  };

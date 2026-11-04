@@ -22,3 +22,8 @@ test('mining execution retains actual block drops count and target coordinates',
  assert.equal(snapshot.step.block,'red_sand');assert.equal(snapshot.step.drops,'red_sand');assert.equal(snapshot.step.count,7);assert.equal(snapshot.step.item,null);assert.deepEqual(snapshot.step.target,step.target);assert.deepEqual(snapshot.step.position,step.target);
  step.target.x=999;assert.equal(snapshot.step.position.x,10);
 });
+test('construction and smelting expose bounded explicit details without implying completion',()=>{
+ const {normalizeStep}=require('../src/persona-execution');
+ assert.deepEqual(normalizeStep({action:'build_schematic',operation:'dig',material:'cobblestone',remainingBlocks:100,position:{x:1,y:62,z:2}}).remainingBlocks,100);
+ const step=normalizeStep({action:'smelt',item:'glass',count:7,from:'sand',fuelItem:'coal'});assert.equal(step.from,'sand');assert.equal(step.item,'glass');assert.equal(step.count,7);assert.equal(step.fuel,'coal');assert.equal(step.operation,null);
+});

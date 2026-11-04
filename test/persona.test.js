@@ -100,3 +100,9 @@ test('community opt-in permits only currently visible authoritative roster playe
  f.body.players=[];assert.equal((await f.persona.submit({...f.proposal(),spec:{kind:'come',target:'Alex'}})).status,'rejected');f.body.players=['Alex'];f.body.player_identities=[];assert.equal((await f.persona.submit({...f.proposal(),spec:{kind:'come',target:'Alex'}})).status,'rejected');await f.persona.close();
  const closed=fixture({players:[]});closed.body.player_identities=[{name:'Alex',uuid:'11111111-1111-4111-8111-111111111111'}];assert.equal((await closed.persona.submit({...closed.proposal(),spec:{kind:'come',target:'Alex'}})).status,'rejected');await closed.persona.close();
 });
+test('blocked reason and final execution remain available after active goal disappears',async()=>{
+ const f=fixture(),p=f.proposal();await f.persona.submit(p);
+ f.persona.finish(p.goal_id,'blocked',{kind:'obtain',request:'Get wood',lastError:'No route to source\nBearer very-private-key',step:{action:'mine',block:'oak_log',drops:'oak_log',count:4,target:{x:10,y:64,z:20}}});
+ const last=f.persona.snapshot().last_result;assert.equal(last.status,'blocked');assert.match(last.reason,/No route/);assert.ok(!last.reason.includes('very-private-key'));assert.equal(last.execution.step.block,'oak_log');assert.equal(last.goal_id,p.goal_id);assert.equal(f.persona.snapshot().active_goal_id,null);
+ await f.persona.submit(f.proposal());assert.equal(f.persona.snapshot().last_result.goal_id,p.goal_id);await f.persona.close();
+});
