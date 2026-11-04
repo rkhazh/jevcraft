@@ -8176,7 +8176,7 @@ function wantedItems(goal = {}) {
 async function keepRoom(bot, task, goal) {
   // A persona hold has no next recipe/blueprint to explain why materials are
   // carried. Optional tidying must not discard supplies for its next goal.
-  if (goal.kind === 'survive' && goal.personaHold === true) return;
+  if (goal.kind === 'move' || goal.kind === 'survive' && goal.personaHold === true) return;
   // In Creative nothing carried is scarce: clear what the work does not
   // need instead of dropping it in the players' world.
   if (bot.game?.gameMode === 'creative') {
@@ -10627,6 +10627,10 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
         const ran = await inCatch(task, goal, () => gameHandlers(bot, decisionClient).corpse_run(bot, task, goal, save));
         if (ran) { goal.stalls = 0; save(); onStep(goal); continue; }
       }
+      if (goal.kind === 'move') {
+        await require('./persona-move').moveStep(bot,task,goal,save);
+        goal.status='complete';goal.completedAt=new Date().toISOString();save();onStep(goal);return {ok:true,goal};
+      }
       if (!endTask && await upkeepStep(bot, task, goal, save, decisionClient, onStep)) { goal.stalls = 0; save(); onStep(goal); continue; }
       bot._goal = goal; bot._goalSave = save;
       if (!endTask && await sculkStep(bot, task, goal, save, decisionClient, onStep)) { goal.stalls = 0; save(); onStep(goal); continue; }
@@ -10696,6 +10700,7 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
       if (goal.stalls > 30) throw new Blocked(`No measurable progress on ${JSON.stringify(goal.step)}`);
     } catch (err) {
       task.interruptCheck = undefined;
+      if(err.personaMoveTerminal)throw err;
       // Thrown before a layer said it had the turn: the one that was
       // running (not bot._turn, which the hunt marks before it looks).
       turnShadow?.gave(layerNow);

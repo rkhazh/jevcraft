@@ -50,7 +50,7 @@ function unworkable(bot, spec) {
 }
 
 function createSession(config, client, { stateDirectory = path.join(__dirname, '..', '.bot-state'), recorder,
-  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false } = {}) {
+  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false, personaLocalMove=false } = {}) {
   const externalPersona = process.env.JEV_PERSONA_MODE === '1';
   let persona = null, vision = null;
   let ended = false, spawned = false, resolveClosed;
@@ -843,7 +843,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     };
     const buildApi=require('./persona-build'), buildEnabled=process.env.JEV_PERSONA_BUILD==='1';
     persona = require('./persona-admission').createPersona({
-      rendezvous, allowVisiblePlayers:personaVisiblePlayers, items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
+      rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
         vision_capabilities:vision?.capabilities()||{enabled:false,look:false},
         execution:require('./persona-execution').executionSnapshot(bot,active),
@@ -870,7 +870,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         await scopedStop(null,'interrupted');
         if (!persona.valid(spec.personaGoalId) || !ready || ended) throw new Error('Persona lease expired');
         const build=spec.kind==='build'?buildApi.prepareBuild(bot,spec,spec.from,{enabled:buildEnabled}):{};
-        const goal={...spec,...build,version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:[],requesterPosition:spec.requesterPosition||null,
+        const goal={...spec,...build,...(spec.kind==='move'?{personaMovePolicy:{anchor:{...bot.entity.position},dimension:'overworld'}}:{}),version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:[],requesterPosition:spec.requesterPosition||null,
           initialInventory:bot.inventory.items().map(i=>({name:i.name,count:i.count}))};
         saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
       },

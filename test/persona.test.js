@@ -106,3 +106,8 @@ test('blocked reason and final execution remain available after active goal disa
  const last=f.persona.snapshot().last_result;assert.equal(last.status,'blocked');assert.match(last.reason,/No route/);assert.ok(!last.reason.includes('very-private-key'));assert.equal(last.execution.step.block,'oak_log');assert.equal(last.goal_id,p.goal_id);assert.equal(f.persona.snapshot().active_goal_id,null);
  await f.persona.submit(f.proposal());assert.equal(f.persona.snapshot().last_result.goal_id,p.goal_id);await f.persona.close();
 });
+test('typed local move is opt-in and completion proves actual position rather than acknowledgement',async()=>{
+ const f=fixture({allowLocalMove:true,checkMove:()=>true});f.body.position={x:0,y:64,z:0};const spec={kind:'move',target:{x:5,y:64,z:0}},p={...f.proposal(),spec};assert.equal((await f.persona.submit(p)).status,'accepted');f.persona.finish(p.goal_id,'complete');assert.equal(f.persona.snapshot().last_result.verified,false);
+ const next={...f.proposal(),spec};await f.persona.submit(next);f.body.position={...spec.target};f.persona.finish(next.goal_id,'complete');assert.equal(f.persona.snapshot().last_result.verified,true);await f.persona.close();
+ const disabled=fixture();assert.equal((await disabled.persona.submit({...disabled.proposal(),spec})).reason,'unsupported_move');await disabled.persona.close();
+});

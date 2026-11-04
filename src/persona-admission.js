@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === [...keys].sort().join();
 const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v) ? v.map(x=>JSON.parse(stable(x))) : Object.fromEntries(Object.keys(v).sort().map(k=>[k,JSON.parse(stable(v[k]))]))) : v);
-function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false}) {
+function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false}) {
  rendezvous=require('./persona-rendezvous').validateRendezvous(rendezvous);
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
  let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve();
@@ -12,7 +12,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
  function snapshot() {
   const state=read(), id=randomUUID(), now=Date.now()/1000;
   observations.set(id,{at:now,mono:performance.now()});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
-  return {...state,last_result:lastResult?structuredClone(lastResult):null,movement_capabilities:{allow_visible_players:allowVisiblePlayers},rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
+  return {...state,last_result:lastResult?structuredClone(lastResult):null,movement_capabilities:{allow_visible_players:allowVisiblePlayers,local_move:{enabled:allowLocalMove,max_distance:16,arrival_distance:1.5}},rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
  }
  function valid(id) {return !closed && active?.proposal.goal_id===id && active.deadline>performance.now();}
  async function cancelNow(id, status='cancelled') {
@@ -32,6 +32,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   const s=p.spec;
   if(['obtain','craft'].includes(s?.kind)) {if(!exact(s,['kind','item','count','deliver'])||!items.includes(s.item)||!state.items.includes(s.item)||!Number.isInteger(s.count)||s.count<1||s.count>64||s.deliver!==false)return 'unsupported_spec';}
   else if(['follow','come'].includes(s?.kind)){if(!exact(s,['kind','target'])||!(players.includes(s.target)||(allowVisiblePlayers&&state.players.includes(s.target)&&state.player_identities?.some(p=>p.name===s.target&&/^[0-9a-f-]{36}$/i.test(p.uuid))))||(!state.players.includes(s.target)&&!(s.kind==='come'&&rendezvous?.target===s.target&&['overworld','minecraft:overworld'].includes(state.dimension))))return 'unsupported_spec';}
+  else if(s?.kind==='move'){if(!allowLocalMove||!exact(s,['kind','target'])||!exact(s.target,['x','y','z'])||![s.target.x,s.target.y,s.target.z].every(Number.isFinite)||!checkMove(s.target))return 'unsupported_move';}
   else if(s?.kind==='build') {
    if(!exact(s,['kind','request','mode','build_id','schematic',...(Object.hasOwn(s,'site_binding')?['site_binding']:[])])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
    try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(err){if(!err.code&&typeof err.validationDetail==='string')return {reason:'invalid_build_geometry',detail:err.validationDetail.replace(/[\p{Cc}\p{Cf}]/gu,' ').slice(0,240)};return err.code||'invalid_build_geometry';}
@@ -48,7 +49,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   reason=check(p);if(reason)return rejection(p,reason);
   const current={proposal:structuredClone(p),deadline:performance.now()+(p.expires_at-Date.now()/1000)*1000};active=current;
   current.timer=setTimeout(()=>enqueue(()=>cancelNow(p.goal_id,'expired')).catch(()=>{}),Math.max(1,current.deadline-performance.now()));current.timer.unref();
-  try{await start({...p.spec,...(p.spec.kind==='come'&&rendezvous?.target===p.spec.target?{requesterPosition:{...rendezvous.position}}:{}),personaGoalId:p.goal_id,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='build'?p.spec.request:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
+  try{await start({...p.spec,...(p.spec.kind==='come'&&rendezvous?.target===p.spec.target?{requesterPosition:{...rendezvous.position}}:{}),personaGoalId:p.goal_id,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='build'?p.spec.request:p.spec.kind==='move'?`Move locally to (${p.spec.target.x}, ${p.spec.target.y}, ${p.spec.target.z})`:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
   catch(err){await cancelNow(p.goal_id,'failed');return rejection(p,'start_failed');}
   if(!valid(p.goal_id)){await cancelNow(p.goal_id,'expired');return rejection(p,'expired');}
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:p.expires_at};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
@@ -77,6 +78,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
      const here=state.position, there=state.player_positions?.[s.target];
      verified=!!here&&!!there&&Math.hypot(here.x-there.x,here.y-there.y,here.z-there.z)<=3;
     }
+    if(s.kind==='move'){const p=state.position;verified=!!p&&['overworld','minecraft:overworld'].includes(state.dimension)&&Math.hypot(p.x-s.target.x,p.y-s.target.y,p.z-s.target.z)<=1.5&&checkMove(s.target);}
     if(s.kind==='build')verified=!!verifyBuild(goal);
     if(!verified)status='failed';
    }
@@ -84,7 +86,7 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
    const {normalizeStep,safeText}=require('./persona-execution');
    const reason=safeText(goal?.lastError||goal?.step?.problem||goal?.step?.reason);
    const execution={kind:s.kind,request:safeText(goal?.request||s.request),step:normalizeStep(goal?.step||{})};
-   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,reason,execution,...(goal?.buildId?{build_id:goal.buildId}:{}),...(goal?.personaBuildVerification?{build_verification:goal.personaBuildVerification}:{}),summary:verified?(s.kind==='build'?(goal.personaBuildVerification?.retained_blocks?`Verified structure ${goal.buildId} with ${goal.personaBuildVerification.retained_blocks} observed retained enclosed original natural foundation cells; not an exact material match`:`Verified all planned structure blocks and clear cells for ${goal.buildId}`):s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}${reason?`: ${reason}`:""}`});
+   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,reason,execution,...(goal?.buildId?{build_id:goal.buildId}:{}),...(goal?.personaBuildVerification?{build_verification:goal.personaBuildVerification}:{}),summary:verified?(s.kind==='build'?(goal.personaBuildVerification?.retained_blocks?`Verified structure ${goal.buildId} with ${goal.personaBuildVerification.retained_blocks} observed retained enclosed original natural foundation cells; not an exact material match`:`Verified all planned structure blocks and clear cells for ${goal.buildId}`):s.kind==='move'?`Observed arrival within 1.5 blocks of requested local point`:s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}${reason?`: ${reason}`:""}`});
   },
   close:()=>{closed=true;return enqueue(async()=>{if(active)await cancelNow(active.proposal.goal_id,'cancelled');});},
  };
