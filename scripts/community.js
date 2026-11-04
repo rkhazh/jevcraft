@@ -26,7 +26,7 @@ async function main(){
  timer=setTimeout(()=>stop('600-second maximum elapsed'),seconds*1000);
  try{
   server=await require('../src/persona-transport').startPersonaTransport({getSession:()=>session,token:process.env.JEV_PERSONA_TOKEN,port:profile.port});
-  session=createSession(config,client,{stateDirectory,authenticate:(bot,cfg)=>communityAuth(bot,cfg,{password,allowRegister:process.env.JEV_COMMUNITY_FIRST_REGISTER==='1',successText:process.env.MC_LOGIN_SUCCESS_TEXT})});
+  session=createSession(config,client,{stateDirectory,authenticate:(bot,cfg)=>communityAuth(bot,cfg,{password,diagnostic:event=>console.log(JSON.stringify({communityAuth:event})),allowRegister:process.env.JEV_COMMUNITY_FIRST_REGISTER==='1',successText:process.env.MC_LOGIN_SUCCESS_TEXT})});
   client.ledger=require('../src/http-usage-ledger').attachHttpUsageLedger(client.ledger,path.join(directory,'http-usage.jsonl'),{maxEntries:limit,onError:()=>stop('HTTP usage ledger unavailable')});
   const outcome=await session.closed;console.log(JSON.stringify({communityClosed:outcome,httpAttempts:budget.used,httpLimit:limit}));
  }finally{clearTimeout(timer);clearTimeout(killTimer);session?.shutdown();if(server)await new Promise(resolve=>server.close(resolve));}

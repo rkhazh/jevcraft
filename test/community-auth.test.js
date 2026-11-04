@@ -24,3 +24,10 @@ test('real Mineflayer plugin injection captures auth sender before real command 
  assert.throws(()=>b.chat('/login secret'),/fresh explicit/);assert.ok(!('send' in commands));assert.ok(!('sendAuth' in g));
  b.emit('messagestr','TolikScheben joined the game','system',{},null);await g.ready;b.emit('messagestr','/login password','system',{},null);assert.equal(b.sent.length,2);b.emit('end');
 });
+test('authentication diagnostics are trusted, bounded and redact secrets/command arguments',async()=>{
+ const b=bot(),events=[],g=communityAuth(b,config,{password:'secret',allowRegister:true,diagnostic:e=>events.push(e)});
+ b.emit('messagestr','private player text','chat',{},'player');assert.equal(events.length,0);
+ b.emit('messagestr','password secret /reg secret secret','system',{},null);
+ assert.ok(!JSON.stringify(events).includes('secret'));assert.ok(!JSON.stringify(events).includes('/reg'));assert.ok(events.some(e=>e.event==='registration_sent'));
+ for(let i=0;i<30;i++)b.emit('messagestr','x'.repeat(1000),'system',{},null);assert.equal(events.length,12);assert.ok(events.every(e=>!e.text||e.text.length<=240));b.emit('end');await assert.rejects(g.ready);
+});
