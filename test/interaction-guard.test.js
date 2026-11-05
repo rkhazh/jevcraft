@@ -175,3 +175,10 @@ test('own furnace placement does not authorize consuming unknown input or fuel',
  w.updateSlot(w.inventoryStart,new Item(registry.itemsByName.raw_iron.id,1));await f.bot.clickWindow(w.inventoryStart,0,0);
  await assert.rejects(f.bot.clickWindow(0,0,0),refused);assert.equal(w.slots[1].count,3);assert.equal(w.slots[0],null);
 });
+test('read-only window evidence follows server packets, never optimistic clicks, and expires with the window',async()=>{
+ const f=fixture({shared:false,contents:[[2,'copper_ingot',2]]}),w=await f.open(),guard=require('../src/interaction-guard');
+ assert.equal(typeof guard.observedWindow,'function');const before=guard.observedWindow(f.bot,w);assert.equal(before.slots[2].count,2);
+ w.acceptClick({slot:2,mouseButton:0,mode:1,item:w.slots[2]});assert.equal(w.slots[2],null);assert.equal(guard.observedWindow(f.bot,w).slots[2].count,2);
+ f.sync(w);const after=guard.observedWindow(f.bot,w);assert.ok(after.revision>before.revision);assert.equal(after.slots[2],null);after.slots[0]={name:'fake'};assert.equal(guard.observedWindow(f.bot,w).slots[0],null);
+ f.bot.currentWindow=null;assert.equal(guard.observedWindow(f.bot,w),null);
+});

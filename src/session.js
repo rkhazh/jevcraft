@@ -178,6 +178,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     users: (process.env.MC_COMMAND_USERS || '').split(',').map(name => name.trim()).filter(Boolean),
     audit: event => { fs.mkdirSync(path.dirname(commandLog), { recursive: true }); fs.appendFileSync(commandLog, JSON.stringify(event) + '\n'); },
   }); if(externalPersona)personaSpeech=require('./persona-chat').exclusivePersonaSpeech(bot); });
+  const pendingWorldId=process.env.MC_WORLD_ID||identity;
   const store = new GoalStore(path.join(stateDirectory, `${identity}.json`));
   const memoryIdentity = process.env.MC_WORLD_ID ? `${identity}-${process.env.MC_WORLD_ID.replace(/[^a-zA-Z0-9_-]/g, '_')}` : identity;
   // The base, its bed and the shelters are places in one world. Kept per
@@ -195,7 +196,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // world rather than the request and is shared by every later build.
   const builds = new BuildRegistry(path.join(stateDirectory, `${memoryIdentity}-builds.json`));
   bot.buildRegistry = builds;
-  if(externalPersona&&process.env.JEV_RESTORATION_AUTHORIZATION)bot._restorationPermit=require('./restoration-permit').loadRestorationAuthorization(process.env.JEV_RESTORATION_AUTHORIZATION,{worldId:process.env.MC_WORLD_ID||identity,consumptionDirectory:path.join(stateDirectory,'restoration-consumed'),sessionId:()=>persona?.sessionId,validGoal:goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId)});
+  if(externalPersona&&process.env.JEV_RESTORATION_AUTHORIZATION)bot._restorationPermit=require('./restoration-permit').loadRestorationAuthorization(process.env.JEV_RESTORATION_AUTHORIZATION,{worldId:pendingWorldId,consumptionDirectory:path.join(stateDirectory,'restoration-consumed'),sessionId:()=>persona?.sessionId,validGoal:goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId)});
   if(externalPersona)bot.loadPlugin(()=>require('./structure-mutations').installStructureMutationGuard(bot,{validGoal:goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId),record:event=>console.log(JSON.stringify({structureMutation:event}))}));
   // The goal store checkpoints placements during a lease. Recover that proof
   // after an interrupted process without resuming the expired goal itself.
@@ -248,7 +249,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     const reports=require('./body-reports');
     const record=(report,source,attribution)=>{
       if(ended||!persona?.sessionId)return;
-      const entry=reports.record(bot,survival.state,report,{source,attribution,sessionId:persona.sessionId,worldId:process.env.MC_WORLD_ID||identity});
+      const entry=reports.record(bot,survival.state,report,{source,attribution,sessionId:persona.sessionId,worldId:pendingWorldId});
       if(entry)saveSurvival();
     };
     bot._observeActionReports=reports.observer(report=>record(report,'controller_report'));
@@ -256,6 +257,10 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
   const saveGoal = goal => { if (!ended && (!goal.personaGoalId || persona?.valid(goal.personaGoalId))) { memory.recordGoal(goal, bot); world.harvest(goal); store.save(goal); } };
   const workStore = { save: goal => { saveGoal(goal); saveSurvival(); } };
+  if(externalPersona){
+    bot._pendingWorkstations=()=>require('./persona-pending-work').stations(store.read(),{worldId:pendingWorldId,dimension:bot.game?.dimension});
+    bot._checkPhysicalWorkCapacity=(additional=1)=>require('./persona-pending-work').capacity(store.read(),additional);
+  }
   let active = null;
   // A goal going again after a threat escaped its loop (launch's catch).
   let relaunching = false;
@@ -870,6 +875,9 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       try { await Promise.race([running.promise,timeout]); }
       catch (err) { close('persona watchdog'); bot.quit('Persona cancellation watchdog'); throw err; }
       finally { clearTimeout(timer); }
+      // Window closure can finish after cancellation invalidates the lease.
+      // Persist those final mechanics without restarting the old controller.
+      if(!running.idle){store.save(running.goal);store.flushSync();}
       return running.goal;
       });
     };
@@ -893,8 +901,12 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         players:Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).map(p=>p.username),
         inventory:(bot.inventory?.items() || []).reduce((out,i)=>{out[i.name]=(out[i.name]||0)+i.count;return out;},{})}),
       impossible:spec=>unworkable(bot,spec), stop:scopedStop,
-      craftAffordances:()=>require('./persona-craft').capabilities(bot,{enabled:personaCraftFromInventory===true&&ready&&!ended}),
-      checkCraft:spec=>!!require('./persona-craft').plan(bot,spec),
+      craftAffordances:personaId=>({...require('./persona-craft').capabilities(bot,{enabled:personaCraftFromInventory===true&&ready&&!ended}),pending_work:personaCraftFromInventory===true&&ready&&!ended?require('./persona-pending-work').advertise(store.read(),{worldId:pendingWorldId,personaId,dimension:bot.game?.dimension}):[]}),
+      checkCraft:(spec,personaId,advertised)=>{
+        const pending=require('./persona-pending-work'),saved=store.read(),context={worldId:pendingWorldId,personaId,dimension:bot.game?.dimension};
+        const continuation=pending.prepare(saved,spec,context,advertised);if(continuation)return continuation;
+        const plan=require('./persona-craft').plan(bot,spec);if(plan.some(s=>s.action==='smelt'))pending.capacity(saved);return true;
+      },
       visitAffordances:principal=>visitApi.capabilities(bot,{known:world.known,principal,enabled:visitEnabled&&ready&&!ended}),
       resolveVisit:bot._personaVisitResolve,
       verifyVisit:goal=>visitApi.verifyVisit(bot,goal),
@@ -912,13 +924,15 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         if (!persona.valid(spec.personaGoalId) || !ready || ended) throw new Error('Persona lease expired');
         if(spec.kind==='visit')visitApi.assertDestination(bot,spec,id=>bot._personaVisitResolve(id,spec.from));
         const build=spec.kind==='build'?buildApi.prepareBuild(bot,spec,spec.from,{enabled:buildEnabled}):{};
-        const goal={...spec,...build,...(spec.kind==='move'?{personaMovePolicy:{anchor:{...bot.entity.position},dimension:'overworld'}}:{}),version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:[],requesterPosition:spec.requesterPosition||null,
+        const pending=require('./persona-pending-work'),previous=store.read();
+        const resumed=spec.personaCraftContinuation?pending.adopt(previous,spec.personaCraftContinuation,{worldId:pendingWorldId,personaId:spec.personaId,dimension:bot.game?.dimension}):null;
+        const goal={...spec,...build,...(resumed?.mechanical||{}),...(spec.kind==='move'?{personaMovePolicy:{anchor:{...bot.entity.position},dimension:'overworld'}}:{}),version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:resumed?resumed.remaining:pending.retain(previous),requesterPosition:spec.requesterPosition||null,
           initialInventory:bot.inventory.items().map(i=>({name:i.name,count:i.count}))};
         saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
       },
     });
     if(personaProfile!==null)persona.setProfile(personaProfile,persona.sessionId);
-    if(process.env.JEV_VISION_ENABLED==='1')vision=require('./persona-vision').installPersonaVision(bot,{sessionId:()=>persona.sessionId,worldId:process.env.MC_WORLD_ID||identity,ready:()=>ready&&!ended,activeGoalId:()=>active?.goal?.personaGoalId||null,safeToLook:()=>ready&&!ended&&(!active||active.idle)&&bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false&&!['survival','vitals'].includes(bot._turn?.holder)});
+    if(process.env.JEV_VISION_ENABLED==='1')vision=require('./persona-vision').installPersonaVision(bot,{sessionId:()=>persona.sessionId,worldId:pendingWorldId,ready:()=>ready&&!ended,activeGoalId:()=>active?.goal?.personaGoalId||null,safeToLook:()=>ready&&!ended&&(!active||active.idle)&&bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false&&!['survival','vitals'].includes(bot._turn?.holder)});
     require('./persona-chat').installPersonaChat(bot,{community:config.host==='mc.agicraft.ru'&&Number(config.port)===25565,ready:()=>ready&&!ended,emit:event=>persona.emit(event)});
     let lastSpeech=0;
     persona.chat = text=>{

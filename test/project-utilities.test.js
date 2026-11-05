@@ -138,3 +138,12 @@ test('authoritative batched air resolves cleanup through the existing normalized
  }
 });
 module.exports={project};
+test('idle and unrelated completion preserve a retained occupied station until its checkpoint is settled',async()=>{
+ const p=new Vec3(8,64,8),f=fixture({grants:[grant(p,{project_id:'project'})]});project(f);await f.bot.placeBlock(f.bot.blockAt(p.offset(0,-1,0)),new Vec3(0,1,0));
+ const {restoreTemporaryPlacements}=require('../src/work');let occupied=true,calls=0;
+ f.bot._pendingWorkstations=()=>occupied?[{id:'invested',goal_id:'old-goal',position:plain(p)}]:[];f.bot.entity.position=p.offset(-2,0,0);
+ const actions={navigate:async()=>{calls++},dig:async(_b,_t,p)=>f.bot.dig(f.bot.blockAt(p))};
+ for(const current of [{kind:'survive'},{kind:'craft',personaGoalId:'new',placedWorkstations:[`cobblestone:${p}`]}])assert.equal(await restoreTemporaryPlacements(f.bot,{check(){}},current,()=>{},actions),false);
+ assert.equal(calls,0);assert.equal(authority.pendingRestorations(f.bot).length,1);
+ occupied=false;assert.equal(await restoreTemporaryPlacements(f.bot,{check(){}},{kind:'survive'},()=>{},actions),true);assert.equal(authority.pendingRestorations(f.bot).length,0);
+});

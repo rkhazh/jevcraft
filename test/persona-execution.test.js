@@ -1,6 +1,19 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const {executionSnapshot}=require('../src/persona-execution');
+test('persona idle controller policy is not an accepted request or an instruction to the planner',()=>{
+ const now=100000,request='Stay nearby between admitted persona goals; react to survival needs without optional resource gathering or exploration';
+ const idle={idle:true,startedAt:now-1000,goal:{kind:'survive',personaHold:true,request,step:{action:'persona_hold'}}};
+ const held=executionSnapshot({_turn:{holder:'work',phase:'persona_hold',since:now-100}},idle,{now});
+ assert.equal(held.status,'holding');assert.equal(held.goal_id,null);assert.equal(held.request,null);
+ assert.equal(held.current_turn.phase,'persona_hold');
+ const threatened=executionSnapshot({_turn:{holder:'survival',phase:'escape',since:now-100}},idle,{now});
+ assert.equal(threatened.interruption.active,true);assert.equal(threatened.request,null);
+ const working={idle:false,startedAt:now-1000,goal:{...idle.goal,kind:'craft',personaGoalId:'fresh',request:'craft 1 glass'}};
+ const interrupted=executionSnapshot({_turn:{holder:'survival',phase:'escape',since:now-100}},working,{now});
+ assert.equal(interrupted.request,'craft 1 glass');assert.equal(interrupted.goal_id,'fresh');assert.equal(interrupted.status,'interrupted');
+ assert.equal(executionSnapshot({}, {...idle,goal:{...idle.goal,personaHold:false}},{now}).request,request);
+});
 test('execution separates actual world evidence from placed counter and ages survival evidence',()=>{
  const now=100000,goal={kind:'build',personaGoalId:'g',status:'running',buildId:'b',blueprint:{blocks:[{},{}]},buildOwned:{a:{},b:{}},step:{action:'mine',item:'stone'},survivalAction:{action:'tunnel_from_warden',reason:'threat nearby',at:new Date(now-20000).toISOString()}};
  let checks=0;const bot={_turn:{holder:'survival',phase:'pocket_next',since:now-1000}},active={goal,startedAt:now-30000};

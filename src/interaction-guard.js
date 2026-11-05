@@ -141,12 +141,13 @@ function installGuard(bot){
  // Credit only after the server reports the requested contents, never from
  // optimistic acceptClick mutations or an old goal's chest/location claims.
  function confirmed(packet,all){
-  if(!enabled(bot)||state.client!==bot._client)return;
+  if(state.client!==bot._client)return;
   const window=bot.currentWindow,record=window&&state.windows.get(window);if(!record||packet.windowId!==window.id)return;
   const before=record.server;record.revision++;
   record.server=record.server.slice();
   if(all){record.server=packet.items.map(i=>Item.fromNotch(i));if(packet.carriedItem!==undefined)record.serverCursor=Item.fromNotch(packet.carriedItem);}
   else if(packet.slot>=0)record.server[packet.slot]=Item.fromNotch(packet.item);
+  if(!enabled(bot))return;
   let c;try{c=context(window);}catch{return;}
   if(c.ledger){
    const changes=delta(totals(Item,before,window.inventoryStart),totals(Item,record.server,window.inventoryStart));
@@ -176,4 +177,9 @@ function installGuard(bot){
  };
 }
 function containerDestructionAllowed(bot,position){return !enabled(bot)||!!installed.get(bot)?.destructionAllowed?.(position);}
-module.exports={InteractionRefused,attackAllowed,assertAttack,containerAllowed,containerFootprint,containerDestructionAllowed,installGuard};
+function observedWindow(bot,window){
+ const state=installed.get(bot),record=state?.windows.get(window);
+ if(!record||state.client!==bot._client||window!==bot.currentWindow)return null;
+ return {revision:record.revision,slots:record.server.map(cloneItem),inventoryStart:window.inventoryStart,inventoryEnd:window.inventoryEnd};
+}
+module.exports={observedWindow,InteractionRefused,attackAllowed,assertAttack,containerAllowed,containerFootprint,containerDestructionAllowed,installGuard};

@@ -151,7 +151,7 @@ async function withUsableWorkstations(bot, task, stock, requested = []) {
   for (const name of ['crafting_table', 'furnace']) {
     task.check();
     if (available[name] || requested.includes(name)) continue;
-    const candidates = find(bot, [name], 32, 8);
+    const candidates = find(bot, [name], 32, 8).filter(p=>!require('./persona-pending-work').reserved(bot,p));
     if (candidates.length && await reachableWorkstation(bot, task, name, candidates)) available[name] = 1;
   }
   return available;
@@ -3297,7 +3297,7 @@ function recallWorkstations(bot, goal) {
 // work is commissioned here, and a replacement never inherits ownership.
 async function restoreTemporaryPlacements(bot,task,goal,save,{navigate:travel=navigate,dig:remove=dig,projectId,completion=false}={}){
   if(goal.holdWorkstation||goal.smelting||goal.smeltingSides?.length)return false;
-  const authority=require('./mutation-authority'),pending=authority.pendingRestorations(bot).filter(r=>(!projectId||r.restore.project_id===projectId)&&(!completion||r.restore.project_id===goal.buildId||goal.placedWorkstations?.includes(`${r.material}:${pos(r.position)}`)));
+  const authority=require('./mutation-authority'),pending=authority.pendingRestorations(bot).filter(r=>!require('./persona-pending-work').reserved(bot,r.position,goal)&&(!projectId||r.restore.project_id===projectId)&&(!completion||r.restore.project_id===goal.buildId||goal.placedWorkstations?.includes(`${r.material}:${pos(r.position)}`)));
   if(!pending.length){delete goal.temporaryCleanup;return false;}
   const target=r=>`${r.dimension}:${r.restore.project_id}:${stationKey(r.position)}`;
   const blocked=r=>bot.entity.position.distanceTo(pos(r.position))>8?'cleanup_out_of_local_reach':isSetAside(goal,'temporary_cleanup',target(r))?'cleanup_resting':authority.queryMutation(bot,'dig',pos(r.position)).allowed?null:authority.queryMutation(bot,'dig',pos(r.position)).reason;
@@ -3332,7 +3332,7 @@ async function workstation(bot, task, name, goal) {
   // Use a carried table nearby instead of spending ingredients/scaffolding
   // walking back to a distant bench. Existing nearby player tables may still
   // be reused, but only tables placed by this session are collected afterward.
-  const stationPermitted=p=>name!=='furnace'||require('./mutation-authority').queryMutation(bot,'container_withdraw',p).allowed;
+  const stationPermitted=p=>!require('./persona-pending-work').reserved(bot,p,goal)&&(name!=='furnace'||require('./mutation-authority').queryMutation(bot,'container_withdraw',p).allowed);
   const candidates = find(bot, [name], name === 'crafting_table' && countOf(bot, name) ? 4 : 32, 8).filter(stationPermitted);
   const existing = await approachWorkstation(bot, task, name, candidates);
   if (existing) return existing;
@@ -3818,6 +3818,7 @@ async function loadSideFurnaces(bot, task, goal, save, main, { item, from, fuelI
   let loaded = 0;
   const o = bot.entity.position.floored(), taken = [main.position];
   for (let n = 0; n < extra && countOf(bot, 'furnace') > 0 && countOf(bot, from) >= share; n++) {
+    try{bot._checkPhysicalWorkCapacity?.(2);}catch(error){if(error.code==='pending_work_capacity')break;throw error;}
     let cell = null;
     for (const dy of [0, 1, -1]) for (let dx = -2; dx <= 2 && !cell; dx++) for (let dz = -2; dz <= 2 && !cell; dz++) {
       const q = o.offset(dx, dy, dz);
@@ -3843,12 +3844,14 @@ async function loadSideFurnaces(bot, task, goal, save, main, { item, from, fuelI
       rememberWorkstation(bot, goal, 'furnace', cell); taken.push(cell);
       const block = bot.blockAt(cell);
       const furnace = await openWindow(bot, task, () => bot.openFurnace(block), { block, what: 'the furnace' });
+      const side={position:{x:cell.x,y:cell.y,z:cell.z},dimension:dimension(bot),item,from,fuelItem:fuel,count:share,targetInventory:countOf(bot,item)+share,at:Date.now()};
+      if(bot._checkPhysicalWorkCapacity){(goal.smeltingSides ||= []).push(side);save();}
       try {
         await furnace.putInput(bot.registry.itemsByName[from].id, null, share);
         await furnace.putFuel(bot.registry.itemsByName[fuel].id, null, fuelUnits(fuel, share));
       } finally { furnace.close(); }
       if (bot._syncWindow) await bot._syncWindow(bot.inventory);
-      (goal.smeltingSides ||= []).push({ position: { x: cell.x, y: cell.y, z: cell.z }, dimension: dimension(bot), item, from, count: share, at: Date.now() });
+      if(!bot._checkPhysicalWorkCapacity)(goal.smeltingSides ||= []).push(side);
       loaded += share; save();
     } catch (err) { task.check(); if (['NeedsAir', 'NeedsSafety', 'Cancelled'].includes(err.name)) throw err; break; }
   }
@@ -3954,7 +3957,7 @@ async function smelt(bot, task, step, goal, save = () => {}) {
     await collectSideFurnaces(bot, task, goal, save, step.item);
     if (sidesFor() < before || countOf(bot, step.item) > had) return;
   }
-  const pending = localBatch(bot, goal, save);
+  const pending = require('./persona-craft').restricted(goal)&&goal?.smelting?goal.smelting:localBatch(bot, goal, save);
   const plannedFuel = pending?.fuelItem || step.fuelItem || 'oak_planks';
   if (!isFuel(plannedFuel)) throw new Blocked(`I can't use ${plannedFuel.replaceAll('_', ' ')} as furnace fuel`);
   // A different batch already in a furnace is finished first, not refused:
@@ -3964,7 +3967,8 @@ async function smelt(bot, task, step, goal, save = () => {}) {
     await smelt(bot, task, { item: pending.item, from: pending.from, fuelItem: pending.fuelItem, count: pending.count }, goal, save);
     return;
   }
-  if (pending && countOf(bot, step.item) >= pending.targetInventory) { delete goal.smelting; save(); return; }
+  const resumedRecipe=!!pending&&require('./persona-craft').restricted(goal);
+  if (pending && !resumedRecipe && countOf(bot, step.item) >= pending.targetInventory) { delete goal.smelting; save(); return; }
   let block;
   if (pending) {
     const p = pos(pending.position);
@@ -3986,8 +3990,10 @@ async function smelt(bot, task, step, goal, save = () => {}) {
     // bring a furnace back, and with the record kept every later step
     // tried this one first and the bot shook itself loose every forty
     // seconds for good. Let the record go and plan the smelt again.
+    if(resumedRecipe&&!bot.blockAt(p))throw require('./persona-craft').blocked('saved furnace is not currently observed');
     if (bot.blockAt(p)?.name !== 'furnace') {
       goal.lostSmelting = { ...pending, at: new Date().toISOString() }; delete goal.smelting; save();
+      if(resumedRecipe)throw require('./persona-craft').blocked('observed saved furnace is missing or changed; recorded batch retired without gathering');
       throw new Error('The furnace holding our saved batch is gone; starting the batch again');
     }
     // Never switch furnaces while the saved ingredients/output belong to this one.
@@ -4023,7 +4029,13 @@ async function smelt(bot, task, step, goal, save = () => {}) {
     }
     if (!block) { save(); throw new Blocked("I can't reach the furnace holding our saved batch"); }
     delete pending.unreachable;
-  } else block = await workstation(bot, task, 'furnace', goal);
+  } else {
+    if(bot._checkPhysicalWorkCapacity&&goal?.smelting){
+      goal.suspendedTasks=require('./persona-pending-work').retain(goal);delete goal.smelting;save();
+    }
+    bot._checkPhysicalWorkCapacity?.();
+    block = await workstation(bot, task, 'furnace', goal);
+  }
   if(!require('./interaction-guard').containerAllowed(bot,block))throw new (require('./interaction-guard').InteractionRefused)('processing_container_requires_standing_grant');
   const before = countOf(bot, step.item);
   // A new batch is only as large as the raw input carried: a smelt of four
@@ -4066,6 +4078,12 @@ async function smelt(bot, task, step, goal, save = () => {}) {
     ? furnace.slots.slice(furnace.inventoryStart, furnace.inventoryEnd).filter(i => i?.name === name).reduce((n, i) => n + i.count, 0)
     : countOf(bot, name);
   let taken = 0, supplies, emptyBatch = false, left = false;
+  const checkSavedBatch=()=>{
+    if(!resumedRecipe)return;
+    task.check();
+    try{return require('./persona-pending-work').observeBatch(pending,furnace.inputItem(),furnace.outputItem(),{remaining:needed-taken});}
+    catch(error){throw require('./persona-craft').blocked(error.message);}
+  };
   // Room is checked again at the moment of taking: the slot made before the
   // window opened was filled by dirt from the furnace's own footing, then by
   // ore dug while waiting, and the ingots sat in the furnace until the wait
@@ -4116,7 +4134,30 @@ async function smelt(bot, task, step, goal, save = () => {}) {
   // count that came into the pockets, 0 where nothing did.
   const takeFrom = async name => {
     const was = furnace.outputItem()?.count || 0, had = carried(name), before = kinds();
-    await furnace.takeOutput();
+    if(resumedRecipe){
+      checkSavedBatch();
+      const observe=require('./interaction-guard').observedWindow, prior=observe(bot,furnace),amount=Math.min(was,needed-taken);
+      if(typeof bot.transfer!=='function'||!prior)throw require('./persona-craft').blocked('authoritative bounded furnace transfer unavailable');
+      const stockOf=facts=>facts.slots.slice(facts.inventoryStart,facts.inventoryEnd).filter(i=>i?.name===name).reduce((n,i)=>n+i.count,0);
+      const inStation=facts=>(facts.slots[0]?.count||0)+(facts.slots[2]?.count||0);
+      let confirmed=0;
+      try{
+        await bot.transfer({window:furnace,itemType:bot.registry.itemsByName[step.item].id,metadata:null,count:amount,sourceStart:2,sourceEnd:3,destStart:furnace.inventoryStart,destEnd:furnace.inventoryEnd});
+        if(bot._syncWindow)await bot._syncWindow(furnace);
+      }finally{
+        const after=observe(bot,furnace);
+        if(after&&after.revision>prior.revision){
+          confirmed=Math.max(0,Math.min(amount,stockOf(after)-stockOf(prior),inStation(prior)-inStation(after)));
+          if(confirmed){
+            pending.count-=confirmed;
+            if(!pending.count){goal.collectedSmelting={...pending,at:new Date().toISOString(),reason:'server-observed collection'};delete goal.smelting;}
+            save();
+          }
+        }
+      }
+      if(!confirmed)throw require('./persona-craft').blocked('furnace collection was not confirmed by the server; checkpoint retained');
+      return confirmed;
+    }else await furnace.takeOutput();
     if (!windowSlots()) return was;
     try { if (bot._syncWindow) await bot._syncWindow(furnace); } catch (err) { task.check(); }
     const got = Math.max(0, carried(name) - had);
@@ -4138,6 +4179,7 @@ async function smelt(bot, task, step, goal, save = () => {}) {
   // contains a different output and there is no room to take it" with no
   // question asked, five times between survival_priority's answers.
   const clearOther = async () => {
+    if(resumedRecipe){checkSavedBatch();return;}
     let other = furnace.outputItem();
     if (!other || other.name === step.item) return;
     if (!roomInWindow()) {
@@ -4173,8 +4215,16 @@ async function smelt(bot, task, step, goal, save = () => {}) {
     }
   };
   try {
+    if(resumedRecipe){
+      task.check();
+      let observed;try{observed=require('./persona-pending-work').observeBatch(pending,furnace.inputItem(),furnace.outputItem());}
+      catch(error){throw require('./persona-craft').blocked(error.message);}
+      if(!observed){goal.lostSmelting={...pending,at:new Date().toISOString(),reason:'observed empty during continuation'};delete goal.smelting;save();throw require('./persona-craft').blocked('observed saved furnace is empty; recorded batch retired without gathering');}
+      needed=observed;pending.count=observed;pending.targetInventory=before+observed;save();
+    }
     await collect();
     if (taken < needed) {
+      checkSavedBatch();
       let existing = furnace.inputItem();
       // Another batch's input comes back out to the pockets the same way.
       if (existing && existing.name !== step.from && typeof furnace.takeInput === 'function' && roomInWindow()) { await furnace.takeInput(); existing = furnace.inputItem(); }
@@ -5434,10 +5484,11 @@ async function prepareBuildTerrain(bot, task, goal, save) {
 async function craftFromInventoryStep(bot,task,goal,save){
   const api=require('./persona-craft');
   task.check();checkAir(bot);
-  if(countOf(bot,goal.item)>=goal.count)return true;
+  if(goal.personaCraftContinuation&&dimension(bot)!==require('./memory').dimension(goal.personaCraftContinuation.dimension))throw api.blocked('pending work belongs to another dimension');
   // A preempted batch retains its real furnace/input record. Resume that work;
   // do not plan replacements for ingredients already deposited in it.
   if(goal.smelting){await smelt(bot,task,goal.smelting,goal,save);return false;}
+  if(countOf(bot,goal.item)>=goal.count)return true;
   const available=await withUsableWorkstations(bot,task,planningInventory(bot),[goal.item]);
   task.check();
   const step=api.plan(bot,goal,{available})[0];
@@ -10825,7 +10876,7 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
     } catch (err) {
       task.interruptCheck = undefined;
       if(require('./persona-craft').restricted(goal)&&!['NeedsAir','NeedsSafety','Cancelled'].includes(err.name))throw err.personaCraftTerminal?err:require('./persona-craft').blocked(err.message);
-      if(err.personaMoveTerminal || err.personaBuildTerminal || err.personaVisitTerminal)throw err;
+      if(err.personaMoveTerminal || err.personaBuildTerminal || err.personaVisitTerminal || err.code==='pending_work_capacity')throw err;
       // Thrown before a layer said it had the turn: the one that was
       // running (not bot._turn, which the hunt marks before it looks).
       turnShadow?.gave(layerNow);

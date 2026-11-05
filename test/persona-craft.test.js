@@ -62,7 +62,7 @@ test('native catalog is cached by inventory and never implies site or contents p
  first.items.push('diamond');assert.ok(!a.capabilities(f.bot,{enabled:true}).items.includes('diamond'));assert.equal(reads,n);
  delete f.stock.crafting_table;delete f.stock.furnace;const later=a.capabilities(f.bot,{enabled:true});assert.ok(reads>n);assert.ok(!later.items.includes('copper_ingot'));assert.ok(!later.items.includes('granite_slab'));
 });
-for(const failure of [null,'changed','stall'])test(`real work loop recipe ${failure||'completes'} keeps inventory boundary and avoids generic preparation`,{timeout:5000},async()=>{
+for(const failure of [null,'changed','stall','capacity'])test(`real work loop recipe ${failure||'completes'} keeps inventory boundary and avoids generic preparation`,{timeout:5000},async()=>{
  const {EventEmitter}=require('node:events'),{Vec3}=require('vec3'),Block=require('prismarine-block')(registry),{SurvivalMovements}=require('../src/movement'),{Survival}=require('../src/survival'),{Task}=require('../src/skills');
  const f=fixture(),bot=Object.assign(new EventEmitter(),f.bot);let crafts=0,reads=0;
  Object.assign(bot,{version:'1.21.11',entities:{},players:{},time:{timeOfDay:1000,age:1000},health:20,food:20,oxygenLevel:20,entity:{position:new Vec3(.5,64,.5),onGround:true,metadata:{},effects:{}},world:{raycast:()=>null},findBlocks:()=>[],controlState:{},setControlState(){},chat(){},_syncWindow:async()=>{if(++reads===1&&failure==='changed')f.stock.diorite=0;},craft:async(recipe)=>{crafts++;if(failure==='changed')assert.fail('inputs changed before click');if(failure==='stall')throw Object.assign(new Error('recipe stalled'),{name:'Stalled'});for(const d of recipe.delta){const name=registry.items[d.id].name;f.stock[name]=(f.stock[name]||0)+d.count;}}});
@@ -71,8 +71,10 @@ for(const failure of [null,'changed','stall'])test(`real work loop recipe ${fail
  bot.pathfinder={movements:new SurvivalMovements(bot),setGoal(){},goto:async()=>assert.fail('no unrelated route')};
  const client={systemOne:async()=>assert.fail('recipe must not commission preparation or persistence')},survival=Object.assign(Object.create(Survival.prototype),{bot,state:{shelters:[]},actions:{},client});
  const goal={kind:'craft',item:'polished_diorite',count:4,personaHold:true,personaCraftPolicy:{source:'carried_inventory'},request:'craft an item from carried ingredients'};
+ if(failure==='capacity'){Object.assign(goal,{kind:'obtain',item:'copper_ingot',count:1,navigationOnly:true});delete goal.personaCraftPolicy;bot._checkPhysicalWorkCapacity=()=>{throw Object.assign(new Error('physical capacity full'),{code:'pending_work_capacity'})};}
  const running=require('../src/work').runGoal(bot,new Task('craft','craft'),goal,{save(){}},{survival,decisionClient:client,maxSteps:3});
- if(failure)await assert.rejects(running,e=>e.personaCraftTerminal&&e.message.includes(failure==='changed'?'changed':'stalled'));
+ if(failure==='capacity')await assert.rejects(running,{code:'pending_work_capacity'});
+ else if(failure)await assert.rejects(running,e=>e.personaCraftTerminal&&e.message.includes(failure==='changed'?'changed':'stalled'));
  else {assert.equal((await running).goal.status,'complete');assert.equal(f.stock.polished_diorite,4);}
- assert.equal(crafts,failure==='changed'?0:1);
+ assert.equal(crafts,['changed','capacity'].includes(failure)?0:1);
 });

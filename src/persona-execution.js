@@ -38,6 +38,9 @@ function executionSnapshot(bot,active,{now=Date.now(),verify=require('./persona-
   progress={build_id:goal.buildId||null,planned_blocks:goal.blueprint.blocks?.length||0,placements_recorded:Object.keys(goal.buildOwned||{}).length,world_observed_at:cached.at/1000,world_verified:report.verified===true,matched_blocks:report.matched_blocks||0,retained_blocks:report.retained_blocks||0,mismatched_blocks:report.mismatched_blocks||0,unknown_blocks:report.unknown_blocks||0,blocked_empty:report.blocked_empty||0};
  }
  const interrupted=currentTurn?.fresh===true&&['survival','vitals'].includes(currentTurn.holder);
- return {status:interrupted?'interrupted':active.idle?'holding':goal.status||'running',goal_id:goal.personaGoalId||null,kind:goal.kind,request:text(goal.request),step:normalizeStep(step),step_source:'recorded_goal',current_turn:currentTurn,survival_action:survival,interruption:{active:interrupted,reason:interrupted?currentTurn.phase:null,last_error:text(goal.lastError)},native_feedback:nativeFeedback(goal,active.startedAt,now),build_progress:progress};
+ // An idle controller's hold policy is not an accepted persona intention.
+ // Its actual activity and threat response remain observable below.
+ const request=active.idle&&goal.personaHold&&!goal.personaGoalId?null:text(goal.request);
+ return {status:interrupted?'interrupted':active.idle?'holding':goal.status||'running',goal_id:goal.personaGoalId||null,kind:goal.kind,request,step:normalizeStep(step),step_source:'recorded_goal',current_turn:currentTurn,survival_action:survival,interruption:{active:interrupted,reason:interrupted?currentTurn.phase:null,last_error:text(goal.lastError)},native_feedback:nativeFeedback(goal,active.startedAt,now),build_progress:progress};
 }
 module.exports={executionSnapshot,normalizeStep,safeText:text};

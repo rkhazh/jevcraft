@@ -2,12 +2,15 @@
 
 // Kept in the same atomic checkpoint as the current task: replacing a request
 // cannot create a crash gap between separate history and active-state files.
-function suspendPrevious(previous) {
+function suspendPrevious(previous, { retain = () => false } = {}) {
   if (!previous) return [];
   const { suspendedTasks = [], ...current } = previous;
   const tasks = [...suspendedTasks];
-  if (current.kind !== 'survive' && current.status !== 'complete') tasks.push(current);
-  return tasks.slice(-8);
+  if (current.kind !== 'survive' && current.status !== 'complete' || retain(current)) tasks.push(current);
+  // Ordinary request history is bounded. Physical work is never evicted by
+  // that history limit; its caller applies backpressure before new investment.
+  const recent = new Set(tasks.filter(task => !retain(task)).slice(-8));
+  return tasks.filter(task => retain(task) || recent.has(task));
 }
 
 const unfinished = goal => goal.status !== 'complete' && goal.kind !== 'survive';
