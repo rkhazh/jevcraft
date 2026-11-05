@@ -41,8 +41,18 @@ function blocked(message){return Object.assign(new Error(message),{name:'Blocked
 function transitAllowed(bot,node,anchor){
  const p={x:node.x+.5,y:node.y,z:node.z+.5};
  if(!point(p)||Math.hypot(p.x-anchor.x,p.y-anchor.y,p.z-anchor.z)>RANGE)return false;
+ return transitSafe(bot,node);
+}
+function transitSafe(bot,node){
  if(node.toBreak?.length||node.toPlace?.some(effect=>!effect.useOne))return false;
  return [-1,0,1].every(dy=>{const block=bot.blockAt(new Vec3(node.x,node.y+dy,node.z));return !!block&&!HAZARD.test(block.name);});
+}
+function localMovements(bot,policy){
+ const original=bot.pathfinder.movements;
+ const movement=Object.assign(Object.create(Object.getPrototypeOf(original)),original,{canDig:false,allow1by1towers:false,scafoldingBlocks:[],allowParkour:false,allowFreeMotion:false,canOpenDoors:false,maxDropDown:1,allowSprinting:false});
+ movement.blocksToAvoid=new Set(original.blocksToAvoid||[]);for(const block of Object.values(bot.registry?.blocksByName||{}))if(HAZARD.test(block.name))movement.blocksToAvoid.add(block.id);
+ const neighbors=movement.getNeighbors;movement.getNeighbors=function(node){return neighbors.call(this,node).filter(n=>transitAllowed(bot,n,policy.anchor));};
+ return movement;
 }
 async function moveStep(bot,task,goal,save,{timeoutMs=15000,checkIntervalMs=100}={}){
  task.check();const policy=goal.personaMovePolicy,p=goal.target;
@@ -50,9 +60,7 @@ async function moveStep(bot,task,goal,save,{timeoutMs=15000,checkIntervalMs=100}
  const distance=()=>Math.hypot(bot.entity.position.x-p.x,bot.entity.position.y-p.y,bot.entity.position.z-p.z);
  if(distance()<=ARRIVAL)return true;
  const original=bot.pathfinder?.movements;if(!original)throw blocked('Local movement unavailable');
- const movement=Object.assign(Object.create(Object.getPrototypeOf(original)),original,{canDig:false,allow1by1towers:false,scafoldingBlocks:[],allowParkour:false,allowFreeMotion:false,canOpenDoors:false,maxDropDown:1,allowSprinting:false});
- movement.blocksToAvoid=new Set(original.blocksToAvoid||[]);for(const block of Object.values(bot.registry?.blocksByName||{}))if(HAZARD.test(block.name))movement.blocksToAvoid.add(block.id);
- const neighbors=movement.getNeighbors;movement.getNeighbors=function(node){return neighbors.call(this,node).filter(n=>transitAllowed(bot,n,policy.anchor));};
+ const movement=localMovements(bot,policy);
  goal.step={action:'move',target:{...p},position:{...p}};save();
  let timer,checks;bot.pathfinder.setMovements(movement);
  const destination=new goals.GoalNear(p.x,p.y,p.z,1),doorUse=require('./doors').guardNavigationDoors(bot,task,destination);
@@ -63,4 +71,4 @@ async function moveStep(bot,task,goal,save,{timeoutMs=15000,checkIntervalMs=100}
  }catch(err){if(['Cancelled','NeedsAir','NeedsSafety','Stalled'].includes(err.name))throw err;throw blocked(String(err.message||'Local route unavailable').slice(0,240));}
  finally{clearTimeout(timer);clearInterval(checks);doorUse.restore();bot.pathfinder.setGoal(null);bot.clearControlStates();bot.pathfinder.setMovements(original);}
 }
-module.exports={RANGE,ARRIVAL,safeStanding,canMove,moveStep,standingAffordances};
+module.exports={RANGE,ARRIVAL,safeStanding,canMove,moveStep,standingAffordances,localMovements,transitAllowed,transitSafe};

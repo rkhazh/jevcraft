@@ -42,6 +42,7 @@ if not key: raise SystemExit('Configured OpenRouter key unavailable')
 # Deliberately do not inherit local house goals, voice endpoints or profile settings.
 env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','TMPDIR','LANG','LC_ALL'}}
 env['JEV_PERSONA_PROFILE']=persona_profile
+env['JEV_PERSONA_VISIT']='1' if tolik else '0'
 if authority.exists():env['JEV_MUTATION_AUTHORITY']=str(authority)
 for k in ['MC_LOGIN_PASSWORD','JEV_PERSONA_TOKEN']:
  if not private.get(k): raise SystemExit(f'Missing community configuration: {k}')

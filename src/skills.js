@@ -163,7 +163,17 @@ async function recoverNavigation(bot, task, deadline, stopWhen) {
       if (currentCell.x !== cell.x || currentCell.z !== cell.z ||
         (swimming ? current.y < start.y - 0.5 || current.y > start.y + 1 : currentCell.y !== cell.y)) return false;
       if (distance() <= 0.15 && (swimming || bot.entity.onGround)) return true;
-      await bot.lookAt(target.offset(0, 1.62, 0), true);
+      // A delayed look must not resume controls after its task was cancelled
+      // or its caller's deadline expired. Settle this recovery's cleanup first.
+      let lookTimer;
+      try {
+        const watched = new Promise((resolve,reject) => { lookTimer=setInterval(() => {
+          try { task.check(); if(Date.now()>=until)resolve(false); } catch(err) { reject(err); }
+        },50); });
+        if(!await Promise.race([Promise.resolve(bot.lookAt(target.offset(0, 1.62, 0), true)).then(()=>true),watched]))return false;
+      } finally { clearInterval(lookTimer); }
+      task.check();
+      if(Date.now()>=until)return false;
       bot.setControlState('sneak', !swimming);
       bot.setControlState('jump', swimming && current.y < start.y - 0.05);
       bot.setControlState('forward', distance() > 0.1);
@@ -537,7 +547,10 @@ async function navigate(bot, task, goal, options = {}) {
 // `quiet`: crouched the whole way, digging and laying nothing, no sprint
 // (note 2036): a crouched step makes no vibration for a sculk sensor or
 // shrieker to hear, in the deep dark's cities.
-async function navigateOnce(bot, task, goal, { timeoutMs = 90000, stallMs = 15000, stopWhen, sprint = false, shore = false, besideLava, edgeTaken, onFoot = false, passing, quiet = false, hostilesOk = false, pickup = false } = {}) {
+async function navigateOnce(bot, task, goal, { timeoutMs = 90000, stallMs = 15000, stopWhen, sprint = false, shore = false, besideLava, edgeTaken, onFoot = false, passing, quiet = false, hostilesOk = false, pickup = false, navigationOnly = false } = {}) {
+  // A bounded trip can use ordinary walking/recentering without commissioning
+  // flight, excavation, boat handling or resource opportunities along the way.
+  if (navigationOnly) { onFoot = true; passing = false; }
   // Every Overworld walk looks in passing unless its caller says not (note 2289): a walk that is part of a stance, a
   // walk back for drops, or a quiet or on-foot walk does not; the look is throttled and takes only what is in reach.
   // The Nether's walks too (note 2310): its gold ore is what the look was made for, and full-10 (2026-10-27 18:40Z) went
@@ -574,10 +587,10 @@ async function navigateOnce(bot, task, goal, { timeoutMs = 90000, stallMs = 1500
   pace.unref?.();
   const ended = (kind, why = null) => { clearInterval(pace); const p = bot.entity?.position; if (p) blocks += Math.min(10, Math.hypot(p.x - last.x, p.y - last.y, p.z - last.z)); fp.noteWalk(bot, { kind, goal: there, from, startedAt, blocks, why, walk, pickup }); };
   // A held sneak let go before the walk (note 1845): the End's holds, digs and pockets crouch the body and a cut step can leave the key down; crouched, the pathfinder's walk cannot step off any edge, and 25588's dragon-194, 200 and 206 (2026-10-18) stood on stubs and rims with hundreds of walks 'timed out without reaching new ground' and 'No route from here'. Said when it happens, so the leak's source can be found.
-  if (!quiet && bot.controlState?.sneak) { console.log(`[walks] the sneak key was held at the walk's start at ${bot.entity?.position?.floored?.() || '?'}: let go (step ${bot._goal?.step?.action || '-'})`); try { bot.setControlState('sneak', false); } catch (_) { /* no controls */ } }
+  if (!quiet && !navigationOnly && bot.controlState?.sneak) { console.log(`[walks] the sneak key was held at the walk's start at ${bot.entity?.position?.floored?.() || '?'}: let go (step ${bot._goal?.step?.action || '-'})`); try { bot.setControlState('sneak', false); } catch (_) { /* no controls */ } }
   try {
     if (quiet) { try { bot.setControlState('sneak', true); } catch (_) { /* no controls in a test */ } }
-    const result = await walkTo(bot, task, goal, { timeoutMs, stallMs, stopWhen, sprint, besideLava, edgeTaken, onFoot, walk, from, hostilesOk }).finally(() => { if (quiet) { try { bot.setControlState('sneak', false); } catch (_) { /* none */ } } });
+    const result = await walkTo(bot, task, goal, { timeoutMs, stallMs, stopWhen, sprint, besideLava, edgeTaken, onFoot, walk, from, hostilesOk, navigationOnly, quiet }).finally(() => { if (quiet) { try { bot.setControlState('sneak', false); } catch (_) { /* none */ } } });
     ended('arrived');
     return result;
   } catch (err) {
@@ -587,18 +600,20 @@ async function navigateOnce(bot, task, goal, { timeoutMs = 90000, stallMs = 1500
   }
 }
 // The walk itself (navigate records its end).
-async function walkTo(bot, task, goal, { timeoutMs, stallMs, stopWhen, sprint, besideLava, edgeTaken, onFoot, walk, from, hostilesOk = false }) {
-  if (require('./flight').canFly(bot)) return require('./flight').flyNavigate(bot, task, goal, { timeoutMs, stallMs, stopWhen });
+async function walkTo(bot, task, goal, { timeoutMs, stallMs, stopWhen, sprint, besideLava, edgeTaken, onFoot, walk, from, hostilesOk = false, navigationOnly = false, quiet = false }) {
+  if (!navigationOnly && require('./flight').canFly(bot)) return require('./flight').flyNavigate(bot, task, goal, { timeoutMs, stallMs, stopWhen });
   // A stopped trip can leave our empty boat underfoot. Clear only that owned
   // boat before player physics attempts to walk through its solid hull.
-  if (bot._ownedBoats?.size && !bot.vehicle) await require('./boats').clearOwnedBoatAtFeet(bot, task);
+  if (!navigationOnly && bot._ownedBoats?.size && !bot.vehicle) await require('./boats').clearOwnedBoatAtFeet(bot, task);
   // Hanging by an edge over a fall that kills or costs half the health,
   // back onto the footing before the pathfinder lets the crouch go (note
   // 622, motion.js footingFirst).
   if (bot.pathfinder && require('./motion').fallUnder(bot)) {
+    if (navigationOnly) throw Object.assign(new Error('No bounded walk begun while hanging over a dangerous fall'), { name: 'NoRoute' });
     // Not back on it: no walk is begun from over the fall (note 1043).
     if (await require('./motion').footingFirst(bot) === 'hanging') throw Object.assign(new Error('Hanging by an edge over a fall and not back onto the footing: no walk begun from here'), { name: 'NoRoute' });
   }
+  if(navigationOnly&&!quiet&&bot.controlState?.sneak)bot.setControlState('sneak',false);
   const movements = bot.pathfinder?.movements, sprinting = sprint && (bot.food ?? 20) > SPRINT_FOOD && !!movements;
   const walked = sprinting ? movements.allowSprinting : undefined;
   if (sprinting) movements.allowSprinting = true;
@@ -630,7 +645,7 @@ async function walkTo(bot, task, goal, { timeoutMs, stallMs, stopWhen, sprint, b
     if (foot) Object.assign(movements, foot);
   };
   const wayDown = require('./way-down');
-  if (movements && !stopWhen?.()) { try { await wayDown.comeDownFirst(bot, task, goal); } catch (err) { restoreEarly(); throw err; } }
+  if (movements && !navigationOnly && !stopWhen?.()) { try { await wayDown.comeDownFirst(bot, task, goal); } catch (err) { restoreEarly(); throw err; } }
   const perch = movements && !foot ? wayDown.livePerch(bot) : null;
   const stillUp = perch && !wayDown.goalOnTop(goal, perch) ? { allow1by1towers: movements.allow1by1towers } : null;
   if (stillUp) movements.allow1by1towers = false;
@@ -986,7 +1001,10 @@ async function navigateAttempt(bot, task, goal, { timeoutMs, stallMs, stopWhen, 
     } catch (_) { held = false; }
     if (held) {
       bot.setControlState?.('sneak', true);
-      setTimeout(() => { try { if (!bot._controller?.sneak) bot.setControlState?.('sneak', false); } catch (_) { /* gone */ } }, EDGE_STOP_MS);
+      setTimeout(() => { try {
+        if(bot._walkSeq!==walk||task.cancelled||bot._controller?.sneak||require('./motion').fallUnder(bot))return;
+        task.check();bot.setControlState?.('sneak', false);
+      } catch (_) { /* the old task no longer owns the release */ } }, EDGE_STOP_MS);
     } else if (edgeCrouch) bot.setControlState?.('sneak', false);
   }
 }

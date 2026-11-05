@@ -79,11 +79,42 @@ function fallUnder(bot) {
   const p = bot.entity?.position;
   if (!p || typeof bot.blockAt !== 'function') return null;
   const terrain = require('./terrain');
-  const f = p.floored();
-  if (at(bot, f.x, f.y - 1, f.z)?.boundingBox === 'block') return null;
-  const fall = terrain.fallFrom(terrain.atOf(bot), { x: f.x, y: f.y - 1, z: f.z });
+  const f = p.floored(),floor=span(p).floor;
+  if (centerContact(bot,p)) return null;
+  const fall = terrain.fallFrom(terrain.atOf(bot), { x: f.x, y: floor, z: f.z });
   const hurts = fall.into === 'ground' ? Math.max(0, fall.n - 3) : fall.into === 'unknown' && fall.n >= 16 ? Infinity : 0;
   return fall.into === 'lava' || hurts >= (bot.health ?? 20) / 2 ? fall : null;
+}
+// Actual contact under the body's middle, including fractional slabs/stairs.
+// The extra cell covers shapes (such as fences) extending above their cell.
+function centerContact(bot,p=bot.entity?.position){
+  if(!p||typeof bot.blockAt!=='function')return false;
+  const x=Math.floor(p.x),z=Math.floor(p.z),floor=span(p).floor;
+  for(const y of [floor,floor-1]){
+    const b=at(bot,x,y,z);
+    if(b?.shapes?.some(s=>p.x>=x+s[0]&&p.x<x+s[3]&&p.z>=z+s[2]&&p.z<z+s[5]&&Math.abs(y+s[4]-p.y)<=.025))return true;
+  }
+  return false;
+}
+// Only an already-held crouch is protected, only while
+// current ground proves a dangerous drop. Path reset and delayed cleanup both
+// pass through this temporary setter; the next controller gets the real one.
+const handoffs=new WeakMap();
+async function withControlHandoff(bot,stop){
+  if(typeof bot.setControlState!=='function')return stop();
+  let scope=handoffs.get(bot);
+  if(!scope){
+    scope={setter:bot.setControlState,count:0};
+    scope.wrapper=function(key,value){
+      if(scope.count>0&&key==='sneak'&&value===false&&bot.controlState?.sneak&&fallUnder(bot))return;
+      return scope.setter.call(this,key,value);
+    };
+    handoffs.set(bot,scope);bot.setControlState=scope.wrapper;
+  }
+  scope.count++;
+  try{return await stop();}finally{
+    if(--scope.count===0){if(bot.setControlState===scope.wrapper)bot.setControlState=scope.setter;handoffs.delete(bot);}
+  }
 }
 // Crouched with the body's middle over a fall into lava, or one that
 // costs half the health or more, held up by the edge of a block beside:
@@ -333,4 +364,4 @@ async function move(bot, task, { label, keys = ['forward'], sneak = true, why, l
   }
 }
 
-module.exports = { move, within, burningAhead, bodyBurning, fallUnder, footingFirst, MOVEMENT, MAX_MS };
+module.exports = { move, within, burningAhead, bodyBurning, fallUnder, centerContact, withControlHandoff, footingFirst, MOVEMENT, MAX_MS };

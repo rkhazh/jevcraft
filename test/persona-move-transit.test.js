@@ -16,6 +16,17 @@ function fixture(){
  const goal={kind:'move',target:{x:4.5,y:64,z:.5},personaMovePolicy:{anchor:{x:.5,y:64,z:.5},dimension:'overworld'}};
  return {bot,set,packets,goal,original,node:new Move(0,64,0,0)};
 }
+test('exported local movement builder matches the executed policy and preserves its source',async()=>{
+ const {localMovements,transitAllowed,transitSafe}=require('../src/persona-move'),f=fixture();
+ assert.equal(typeof localMovements,'function');assert.equal(typeof transitAllowed,'function');assert.equal(typeof transitSafe,'function');
+ f.set(1,64,0,'stone_slab',{type:'bottom',waterlogged:false});
+ const built=localMovements(f.bot,f.goal.personaMovePolicy),nodes=movement=>movement.getNeighbors(f.node).map(n=>({x:n.x,y:n.y,z:n.z,toBreak:n.toBreak,toPlace:n.toPlace}));
+ f.bot.pathfinder.goto=async()=>{const actual=f.bot.pathfinder.movements;for(const key of ['canDig','allow1by1towers','allowParkour','allowFreeMotion','canOpenDoors','maxDropDown','allowSprinting'])assert.equal(actual[key],built[key]);assert.deepEqual(nodes(actual),nodes(built));f.bot.entity.position=new Vec3(4.5,64,.5);};
+ assert.equal(await moveStep(f.bot,{check(){}},f.goal,()=>{}),true);
+ assert.notEqual(built,f.original);assert.equal(f.original.canDig,true);assert.equal(f.original.allowParkour,true);
+ const outside={x:20,y:64,z:0,toBreak:[],toPlace:[]};assert.equal(transitAllowed(f.bot,outside,f.goal.personaMovePolicy.anchor),false);assert.equal(transitSafe(f.bot,outside),true);
+ outside.toPlace=[{x:20,y:63,z:0,dy:1}];assert.equal(transitSafe(f.bot,outside),false);
+});
 for(const [name,properties]of [['stone_brick_stairs',{facing:'east',half:'bottom',shape:'straight',waterlogged:false}],['stone_slab',{type:'bottom',waterlogged:false}]])test(`local transit retains native collision-aware ${name} neighbor`,async()=>{
  const f=fixture();f.set(1,64,0,name,properties);
  const native=[];Object.assign(f.original,{canDig:false,allow1by1towers:false,scafoldingBlocks:[]});f.original.getMoveJumpUp(f.node,{x:1,z:0},native);

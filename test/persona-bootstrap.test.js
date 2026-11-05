@@ -4,7 +4,7 @@ const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),Modu
 const profile=()=>({persona_id:'configured-traveller',identity:'Exact configured identity.\n'+ 'Character detail. '.repeat(25),motivations:['Respect shared property.'],social_style:'Brief character voice.'});
 const until=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(r=>setTimeout(r,5));}assert.fail('Offline bootstrap did not settle');};
 
-async function sessionFixture(run){
+async function sessionFixture(run,{idleCleanup}={}){
  const bot=new EventEmitter();bot._client=new EventEmitter();bot._client.write=()=>{};
  Object.assign(bot,{loadPlugin(){},username:'Traveller',version:'26.1',health:20,food:20,isAlive:true,registry:{itemsByName:{}},
   game:{dimension:'overworld',gameMode:'survival'},time:{timeOfDay:1000},players:{},entities:{},entity:{position:new Vec3(.5,64,.5)},inventory:{items:()=>[]},
@@ -19,10 +19,11 @@ async function sessionFixture(run){
   if(name==='./slow-calls')return {install(){}};
   if(name==='./work'&&parent.filename===filename)return {
    createSurvival:(_bot,options)=>(survival={state:{},client:options.client}),
-   runGoal:async()=>{},
+   runGoal:async()=>{seen.push({workStarted:true,sneak:bot.controlState?.sneak,setter:bot.setControlState});},
    runIdle:async(_bot,task)=>{
     await survival.client.systemOne({state:{phase:'first_survival'},questions:{}});
     while(!task.cancelled)await new Promise(r=>setTimeout(r,5));
+    if(idleCleanup)await idleCleanup(bot);
    }
   };
   return original.call(this,name,parent,isMain);
@@ -52,6 +53,35 @@ test('standalone callers without a bootstrap profile retain immediate survival s
  create({});bot.emit('spawn');await until(()=>seen.length);
  assert.equal(seen[0].state.phase,'first_survival');assert.equal(seen[0].state.actor_profile,undefined);
 }));
+
+test('local movement opt-in does not enable the wider visit capability',async()=>sessionFixture(async({bot,seen,create})=>{
+ process.env.JEV_PERSONA_VISIT='1';
+ const session=create({personaLocalMove:true});bot.emit('spawn');await until(()=>seen.length);
+ assert.equal(session.persona.snapshot().movement_capabilities.local_move.enabled,true);
+ assert.equal(session.persona.snapshot().movement_capabilities.visit.enabled,false);
+}));
+
+test('explicit visit session option publishes only recorded bounded references after readiness',async()=>sessionFixture(async({bot,seen,create})=>{
+ const session=create({personaVisit:true});
+ bot.buildRegistry.state.builds.push({id:'recorded-project',name:'Known room',dimension:'overworld',entrance:{x:8.5,y:64,z:.5},updatedAt:'2026-11-04T00:00:00Z'});
+ assert.equal(session.persona.snapshot().movement_capabilities.visit.enabled,false);
+ bot.emit('spawn');await until(()=>seen.length);
+ const cap=session.persona.snapshot().movement_capabilities.visit;
+ assert.equal(cap.enabled,true);assert.equal(cap.destinations[0].id,'project:recorded-project');assert.equal(cap.destinations[0].access,'unverified');assert.equal(cap.max_distance,96);
+}));
+
+test('actual persona session handoff retains protective crouch through native reset and delayed idle cleanup',async()=>sessionFixture(async({bot,seen,create})=>{
+ const {randomUUID}=require('node:crypto'),Block=require('prismarine-block')('1.21.11');bot.registry=require('minecraft-data')('1.21.11');bot.version='1.21.11';
+ Object.assign(bot.entity,{position:new Vec3(1.1,64,.5),onGround:true,height:1.8,width:.6,effects:{}});
+ bot.blockAt=p=>{const q=p.floored(),b=Block.fromStateId(bot.registry.blocksByName[q.y<=40||q.x===0&&q.y===63?'stone':'air'].defaultState,0);b.position=q;return b;};
+ bot.controlState={sneak:true,forward:true};const setter=bot.setControlState=(k,v)=>{bot.controlState[k]=v;};bot.clearControlStates=()=>{for(const k of Object.keys(bot.controlState))bot.setControlState(k,false);};
+ const session=create({personaVisit:true});require('mineflayer-pathfinder').pathfinder(bot);
+ bot.buildRegistry.state.builds.push({id:'reference',name:'Known place',dimension:'overworld',entrance:{x:9.5,y:64,z:.5}});
+ bot.emit('spawn');await until(()=>seen.length);bot.setControlState('sneak',true);bot.setControlState('forward',true);
+ const s=session.persona.snapshot(),now=Date.now()/1000,p={schema_version:1,goal_id:randomUUID(),persona_id:'actor',session_id:s.session_id,observation_id:s.observation_id,issued_at:now,expires_at:now+60,state:'proposed',spec:{kind:'visit',target:'project:reference'}};
+ assert.equal((await session.persona.submit(p)).status,'accepted');await until(()=>seen.some(e=>e.workStarted));
+ const started=seen.find(e=>e.workStarted);assert.equal(started.sneak,true);assert.equal(started.setter,setter);assert.equal(bot.controlState.forward,false);
+},{idleCleanup:async bot=>{await new Promise(r=>setTimeout(r,10));bot.clearControlStates();bot.setControlState('sneak',false);}}));
 
 test('invalid shared-world authority fails before connection',async()=>sessionFixture(async({create,connections})=>{
  assert.throws(()=>create({mutationPolicy:{version:1,world_id:'another-world'}}),/mutation policy/);
