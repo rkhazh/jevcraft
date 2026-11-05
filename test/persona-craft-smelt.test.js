@@ -24,3 +24,41 @@ test('one-furnace carried fuel budget is not split into optional side furnaces',
  await assert.rejects(work.smelt(bot,{check(){}},plan.at(-1),goal,()=>{}),/main furnace opened/);
  assert.equal(sideReads,0);assert.equal(opened,1);assert.equal(stock.coal,1);assert.equal(goal.smeltingSides,undefined);
 });
+
+// Derived from offline-review-smelt-interruption-20261105.js/.json. The same
+// station-approach fixture above is used; Task and threat detection stay real.
+// Introduce the interruption only after entering the native cooking wait.
+for(const interruption of ['threat','cancel'])test(`native cooking wait yields to ${interruption} and retains its batch`,{timeout:3000,concurrency:false},async t=>{
+ const {Task}=require('../src/skills'),{checkThreats}=require('../src/danger');
+ const p=new Vec3(1,64,0);let closed=0,waiting=false,interrupted=false,timer;
+ const furnace={inputItem:()=>({name:'raw_copper',count:1}),fuelItem:()=>({name:'oak_planks',count:1}),outputItem:()=>null,fuel:1,fuelSeconds:10,close(){closed++}};
+ const bot={registry,version:'1.21.11',game:{gameMode:'survival',dimension:'overworld'},health:20,food:20,oxygenLevel:20,time:{timeOfDay:1000},
+  entity:{id:0,position:new Vec3(.5,64,.5),height:1.8,onGround:true,effects:{},metadata:[]},inventory:{items:()=>[]},entities:{},world:{raycast:()=>null},
+  blockAt:q=>q.equals(p)?{name:'furnace',position:p,boundingBox:'block'}:{name:q.y<64?'stone':'air',position:q,boundingBox:q.y<64?'block':'empty',shapes:q.y<64?[[0,0,0,1,1,1]]:[]},
+  findBlocks:()=>[p],openFurnace:async()=>furnace,_syncWindow:async()=>{},dig:async()=>assert.fail('no gathering while interrupted')};
+ const task=new Task('recipe-interruption','recipe-interruption');
+ task.interruptCheck=()=>checkThreats(bot);
+ task.opportunityClient={systemOne:async()=>assert.fail('cooking wait must not call a model')};
+ const batch={item:'copper_ingot',from:'raw_copper',fuelItem:'oak_planks',position:{...p},dimension:'overworld',targetInventory:1,count:1,startedAt:Date.now()};
+ const goal={kind:'craft',item:'copper_ingot',count:1,personaHold:true,personaCraftPolicy:{source:'carried_inventory'},smelting:batch};
+ const log=t.mock.method(console,'log',(...args)=>{
+  if(!waiting&&String(args[0]).startsWith('[smelt] copper_ingot at')){
+   waiting=true;
+   timer=setTimeout(()=>{
+    interrupted=true;
+    if(interruption==='cancel')task.cancel();
+    else bot.entities[1]={id:1,name:'creeper',type:'mob',position:new Vec3(2.5,64,.5),velocity:new Vec3(0,0,0),height:1.7,width:.6,isValid:true,metadata:[]};
+   },20);
+  }
+ });
+ const deadline=setTimeout(()=>task.cancel(),2000);
+ try{
+  await assert.rejects(work.smelt(bot,task,batch,goal,()=>{}),{name:interruption==='threat'?'NeedsSafety':'Cancelled'});
+  assert.equal(waiting,true,'the native cooking wait was reached');
+  assert.equal(interrupted,true,'the requested interruption happened before the fallback deadline');
+  assert.equal(closed,1,'the interrupted furnace window was closed');
+  assert.strictEqual(goal.smelting,batch,'the real pending batch remains available to resume');
+  assert.equal(batch.targetInventory,1);assert.deepEqual(batch.position,{...p});
+  assert.equal(batch.supplyWork,undefined);assert.equal(batch.missingSupply,undefined);
+ }finally{clearTimeout(timer);clearTimeout(deadline);task.cancel();log.mock.restore();}
+});
