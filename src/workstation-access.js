@@ -1,7 +1,19 @@
 'use strict';
 const { ConstructionGoal } = require('./construction-access');
-const { surveyRoute, navigate } = require('./skills');
+const { surveyRoute, navigate, countOf } = require('./skills');
 const { checkAir } = require('./vitals');
+
+const stationPermitted = (bot, name, p, goal) => !require('./persona-pending-work').reserved(bot, p, goal) &&
+  (name !== 'furnace' || require('./mutation-authority').queryMutation(bot, 'container_withdraw', p).allowed);
+
+// Observation only: native search bounds and eligibility, without claiming a
+// route or usable face. The caller still proves access before opening a window.
+function observedWorkstations(bot, name, goal) {
+  const id = bot.registry?.blocksByName?.[name]?.id;
+  if (id === undefined || !bot.entity?.position || !bot.findBlocks || !bot.blockAt) return [];
+  return bot.findBlocks({ matching: [id], maxDistance: name === 'crafting_table' && countOf(bot, name) ? 4 : 32, count: 8 })
+    .filter(p => bot.blockAt(p)?.name === name && stationPermitted(bot, name, p, goal));
+}
 
 // A nearby workstation can be sealed inside a building. Require a reachable,
 // visible face before opening it, and try other observed stations without
@@ -18,7 +30,7 @@ async function selectWorkstation(bot, task, name, positions, approach, { operati
   try {
     for (const p of positions.slice(0, 8)) {
       task.check(); checkAir(bot);
-      const valid = () => operation === 'place' ? eligible(p) : bot.blockAt(p)?.name === name;
+      const valid = () => operation === 'place' ? eligible(p) : bot.blockAt(p)?.name === name && (!eligible || eligible(p));
       if (!valid()) continue;
       const destination = new ConstructionGoal(bot, p, operation, { material: name });
       if (!destination.reachable(bot.entity.position, .2)) {
@@ -30,7 +42,7 @@ async function selectWorkstation(bot, task, name, positions, approach, { operati
         if (route.status !== 'success') continue;
         if (!approach) {
           const block = bot.blockAt(p);
-          if (block?.name === name) return block;
+          if (valid()) return block;
           continue;
         }
         try { await navigate(bot, task, destination, { timeoutMs: Math.min(8000, deadline - Date.now()), stallMs: 4000,
@@ -55,8 +67,8 @@ async function selectWorkstation(bot, task, name, positions, approach, { operati
   }
 }
 
-const approachWorkstation = (bot, task, name, positions) => selectWorkstation(bot, task, name, positions, true);
-const reachableWorkstation = (bot, task, name, positions) => selectWorkstation(bot, task, name, positions, false);
+const approachWorkstation = (bot, task, name, positions, goal) => selectWorkstation(bot, task, name, positions, true, { eligible: p => stationPermitted(bot, name, p, goal) });
+const reachableWorkstation = (bot, task, name, positions, goal) => selectWorkstation(bot, task, name, positions, false, { eligible: p => stationPermitted(bot, name, p, goal) });
 const placeWorkstation = (bot, task, name, positions, eligible, attempt) => selectWorkstation(bot, task, name, positions, true, { operation: 'place', eligible, attempt });
 
-module.exports = { approachWorkstation, reachableWorkstation, placeWorkstation };
+module.exports = { approachWorkstation, reachableWorkstation, placeWorkstation, observedWorkstations, stationPermitted };

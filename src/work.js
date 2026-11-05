@@ -67,7 +67,7 @@ const { isBed, matchesBuildBlock, placementGoal, buildCellComplete, buildFootpri
 const { isDoor, doorPairMatches } = require('./doors');
 const interactableBlocks = new Set(require('mineflayer-pathfinder/lib/interactable.json'));
 const { chooseConstructionWork, approachConstruction } = require('./construction-access');
-const { approachWorkstation, reachableWorkstation } = require('./workstation-access');
+const { approachWorkstation, reachableWorkstation, observedWorkstations, stationPermitted: permittedWorkstation } = require('./workstation-access');
 const { fuelPlanks, CARRIED_FUELS, isFuel, fuelUnits } = require('./fuel');
 const { opportunisticMining } = require('./opportunistic-mining');
 const { opportunisticPickups } = require('./opportunistic-pickups');
@@ -151,7 +151,7 @@ async function withUsableWorkstations(bot, task, stock, requested = []) {
   for (const name of ['crafting_table', 'furnace']) {
     task.check();
     if (available[name] || requested.includes(name)) continue;
-    const candidates = find(bot, [name], 32, 8).filter(p=>!require('./persona-pending-work').reserved(bot,p));
+    const candidates = observedWorkstations(bot, name);
     if (candidates.length && await reachableWorkstation(bot, task, name, candidates)) available[name] = 1;
   }
   return available;
@@ -3332,9 +3332,9 @@ async function workstation(bot, task, name, goal) {
   // Use a carried table nearby instead of spending ingredients/scaffolding
   // walking back to a distant bench. Existing nearby player tables may still
   // be reused, but only tables placed by this session are collected afterward.
-  const stationPermitted=p=>!require('./persona-pending-work').reserved(bot,p,goal)&&(name!=='furnace'||require('./mutation-authority').queryMutation(bot,'container_withdraw',p).allowed);
-  const candidates = find(bot, [name], name === 'crafting_table' && countOf(bot, name) ? 4 : 32, 8).filter(stationPermitted);
-  const existing = await approachWorkstation(bot, task, name, candidates);
+  const stationPermitted=p=>permittedWorkstation(bot,name,p,goal);
+  const candidates = observedWorkstations(bot, name, goal);
+  const existing = await approachWorkstation(bot, task, name, candidates, goal);
   if (existing) return existing;
   if (!countOf(bot, name)) throw new Blocked(`I can't reach a ${name.replaceAll('_', ' ')}. I need one I can use.`);
   let p, refused = null, tries = 0;
