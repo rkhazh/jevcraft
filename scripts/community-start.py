@@ -54,6 +54,7 @@ if args.restoration_authorization:
  env['JEV_RESTORATION_AUTHORIZATION']=str(args.restoration_authorization.absolute())
 if args.rendezvous_player: env['JEV_COMMUNITY_RENDEZVOUS']=json.dumps(dict(target=args.rendezvous_player,position=dict(zip(('x','y','z'),args.rendezvous_position)),dimension='overworld'))
 if tolik: env['JEV_PERSONA_ITEMS']+=',stone,stone_shovel,iron_axe,iron_sword,shield,bucket,shears,white_bed,chest,dirt,sand,glass,glass_pane,ladder,oak_door,spruce_door,oak_stairs,spruce_stairs,cobblestone_stairs,oak_slab,spruce_slab,cobblestone_slab,oak_fence,spruce_fence,white_wool,black_wool,gray_wool,brown_wool,black_bed,gray_bed,brown_bed'
+env['JEV_PERSONA_CRAFT_FROM_INVENTORY']='1' if tolik else '0'
 runs=profile/'runs'/'tolik' if tolik else profile/'runs'
 run=runs/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
 run.parent.mkdir(parents=True,exist_ok=True)

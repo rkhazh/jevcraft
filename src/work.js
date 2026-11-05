@@ -3476,7 +3476,7 @@ async function craft(bot, task, step, goal) {
     task.check();
     const done = () => countOf(bot, step.item) >= before + recipe.result.count * (n + 1);
     await roomForOutput();
-    try { await openWindow(bot, task, () => bot.craft(recipe, 1, table), { block: table, what: 'the crafting table', timeoutMs: 10000 }); }
+    try { await openWindow(bot, task, () => { task.check(); if(require('./persona-craft').restricted(goal))require('./persona-craft').assertRecipeInputs(bot,recipe); return bot.craft(recipe, 1, table); }, { block: table, what: 'the crafting table', timeoutMs: 10000 }); }
     finally { task.check(); await settleCraftInventory(bot, task); }
     // A craft whose ingredients were left on the cursor made nothing (both
     // runs, every ten minutes or so: "cursor oak_planks"). Settled, it is
@@ -3498,7 +3498,7 @@ async function craft(bot, task, step, goal) {
         if (!fits()) { noteCraftFailure(bot, step.item, `no free slot for the output (${bot.inventory.emptySlotCount?.() ?? '?'} free slots)`); throw new Blocked(`No free slot for the ${what}; the inventory is full`); }
       }
       const open = closeStrayWindow(bot);
-      try { await openWindow(bot, task, () => bot.craft(recipe, 1, table), { block: table, what: 'the crafting table', timeoutMs: 10000 }); }
+      try { await openWindow(bot, task, () => { task.check(); if(require('./persona-craft').restricted(goal))require('./persona-craft').assertRecipeInputs(bot,recipe); return bot.craft(recipe, 1, table); }, { block: table, what: 'the crafting table', timeoutMs: 10000 }); }
       finally { task.check(); await settleCraftInventory(bot, task); }
       try { await waitFor(task, done, 4000, awaitedItem(bot, step.item, before + recipe.result.count * (n + 1), `crafting${table ? ' at a table' : ''}, twice${open ? `, a ${open} window found open between` : ''}`)); }
       catch (failed) { task.check(); noteCraftFailure(bot, step.item, failed.message.replace(/^Timed out waiting for world\/inventory update: /, 'no output: ')); throw failed; }
@@ -3716,6 +3716,7 @@ const WAIT_ORES = ['coal_ore', 'iron_ore', 'gold_ore', 'lapis_ore', 'redstone_or
 // of Jev; null (nothing to weigh, or held through an outage) stands by the
 // furnace, as smelt does.
 async function whileCooking(bot, task, goal, save, { cooking, oreInReach, walkTarget, what, count, spent = [], leave = null, walks = null, sides = null, own = null, item = null, workOnOffer = null, ownWhy = null }) {
+  if(require('./persona-craft').restricted(goal))return 'wait_here';
   // From one item up: trial 46 stood by its furnace for a one-ingot batch,
   // crafted, and stood again for a two-ingot one, seventy-five seconds on
   // one spot, each batch under the twenty seconds this once needed.
@@ -3789,6 +3790,9 @@ async function whileCooking(bot, task, goal, save, { cooking, oreInReach, walkTa
 // left to cook, recorded on the goal so a restart still collects them; the
 // main furnace takes the rest as before.
 async function loadSideFurnaces(bot, task, goal, save, main, { item, from, fuelItem, total }) {
+  // The inventory-only recipe graph budgets fuel for one furnace. Splitting
+  // that batch spends extra fuel/stations and is optional preparation.
+  if(require('./persona-craft').restricted(goal))return 0;
   // From six, three a furnace at least (note 2471, the user: 'should it create multiple furnaces at a time?'): the batches
   // before the Nether are three to nine raw iron or gold, 30 to 90 seconds in one furnace, and a furnace is 8 cobblestone
   // and a few seconds; on 2026-10-29's full runs no side furnace was loaded at all, the floor being sixteen.
@@ -4455,6 +4459,10 @@ async function smelt(bot, task, step, goal, save = () => {}) {
   }
   if (supplies) {
     if (!goal?.smelting) throw new Blocked(supplies.message);
+    if(require('./persona-craft').restricted(goal)){
+      goal.smelting.missingSupply={item:supplies.item,count:supplies.count};save();
+      throw require('./persona-craft').blocked(supplies.message);
+    }
     // Close the furnace before finding supplies, retaining its location and
     // output target. A separate saved subtask avoids recursively resuming the
     // same hungry furnace or replanning ore already cooking inside it.
@@ -4678,6 +4686,10 @@ async function prepareMiningTool(bot, task, goal, save, plan, available, { reque
 async function executeAcquisition(bot, task, step, goal, save) {
   goal.step = step;
   save();
+  if(require('./persona-craft').restricted(goal)){
+    if(!['craft','smelt'].includes(step.action))throw require('./persona-craft').blocked('non-recipe action refused');
+    require('./persona-craft').assertInputs(bot,step);
+  }
   if (step.action === 'mine') {
     // Planks the world put somewhere (a mineshaft's) that no walk reaches
     // rest as a source, and the plan goes back to logs (catalogPlan, note
@@ -5419,7 +5431,24 @@ async function prepareBuildTerrain(bot, task, goal, save) {
   await executeConstructionWork(bot, task, goal, save, work);
 }
 
+async function craftFromInventoryStep(bot,task,goal,save){
+  const api=require('./persona-craft');
+  task.check();checkAir(bot);
+  if(countOf(bot,goal.item)>=goal.count)return true;
+  // A preempted batch retains its real furnace/input record. Resume that work;
+  // do not plan replacements for ingredients already deposited in it.
+  if(goal.smelting){await smelt(bot,task,goal.smelting,goal,save);return false;}
+  const available=await withUsableWorkstations(bot,task,planningInventory(bot),[goal.item]);
+  task.check();
+  const step=api.plan(bot,goal,{available})[0];
+  if(!step)throw api.blocked('no recipe progress');
+  api.assertInputs(bot,step);
+  await executeAcquisition(bot,task,step,goal,save);
+  return countOf(bot,goal.item)>=goal.count;
+}
+
 async function obtainStep(bot, task, goal, save, client, onStep) {
+  if(require('./persona-craft').restricted(goal))return craftFromInventoryStep(bot,task,goal,save);
   if (await takeOutBatch(bot, task, goal, save)) return false;
   if ((goal.delivered || 0) >= goal.count) return true;
   const remaining = (goal.deliver ? Math.min(goal.count, goal.deliveryTarget ?? goal.count) : goal.count) - (goal.delivered || 0);
@@ -10671,12 +10700,12 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
       }
       turnShadow = endTask || ruled ? null : shadowTurn(bot, goal, activeWork, survival); layerNow = 'hunt';
       if (!ruled) require('./turn').takeTurn(bot, 'hunt', 'observed');
-      if (!endTask && !ruled && !goal.navigationOnly && await huntObserved(bot, task, activeWork, saveWork, { navigate, dig }, decisionClient)) {
+      if (!endTask && !ruled && !goal.navigationOnly && !require('./persona-craft').restricted(goal) && await huntObserved(bot, task, activeWork, saveWork, { navigate, dig }, decisionClient)) {
         turnShadow?.gave('hunt');
         goal.failures = 0; goal.stalls = 0; delete goal.lastError; delete goal.lastErrorAt; save(); onStep(goal); continue;
       }
       layerNow = 'work';
-      if (!goal.navigationOnly && goal.recoveryAdvice?.active) {
+      if (!goal.navigationOnly && !require('./persona-craft').restricted(goal) && goal.recoveryAdvice?.active) {
         await maintainVitals(bot, task, () => {}, { client: task.opportunityClient, goal, save });
         if (await recoveryAdviser.step(task, goal, save)) { turnShadow?.gave('work'); save(); onStep(goal); continue; }
       }
@@ -10722,6 +10751,8 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
         await require('./persona-visit').visitStep(bot,task,goal,save);
         goal.status='complete';goal.completedAt=new Date().toISOString();save();onStep(goal);return {ok:true,goal};
       }
+      if(require('./persona-craft').restricted(goal))complete=await craftFromInventoryStep(bot,task,goal,save);
+      else {
       if (!endTask && await upkeepStep(bot, task, goal, save, decisionClient, onStep)) { goal.stalls = 0; save(); onStep(goal); continue; }
       bot._goal = goal; bot._goalSave = save;
       if (!endTask && await sculkStep(bot, task, goal, save, decisionClient, onStep)) { goal.stalls = 0; save(); onStep(goal); continue; }
@@ -10761,6 +10792,7 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
       }
       if (prepared && goal.kind === 'nether') complete = await netherStep(bot, task, goal, save, decisionClient || task.opportunityClient);
       if (prepared && goal.kind === 'win') complete = await gameStep(bot, task, goal, save, gameHandlers(bot, decisionClient));
+      }
       task.check();
       goal.failures = 0;
       delete goal.lastError; delete goal.lastErrorAt;
@@ -10792,6 +10824,7 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
       if (goal.stalls > 30) throw new Blocked(`No measurable progress on ${JSON.stringify(goal.step)}`);
     } catch (err) {
       task.interruptCheck = undefined;
+      if(require('./persona-craft').restricted(goal)&&!['NeedsAir','NeedsSafety','Cancelled'].includes(err.name))throw err.personaCraftTerminal?err:require('./persona-craft').blocked(err.message);
       if(err.personaMoveTerminal || err.personaBuildTerminal || err.personaVisitTerminal)throw err;
       // Thrown before a layer said it had the turn: the one that was
       // running (not bot._turn, which the hunt marks before it looks).
@@ -10904,4 +10937,4 @@ function constructionObservation(bot, goal) {
   return JSON.stringify(positions.map(p => [p.x, p.y, p.z, bot.blockAt(pos(p))?.stateId ?? bot.blockAt(pos(p))?.name ?? null]));
 }
 
-module.exports = { restoreTemporaryPlacements, decideAction, atOwnDropsInWater, clearLineToOre, bedBackSays, takeUpFoodSays, woodLeftSays, oreUseSays, ruinSays, buildSays, mineAtSource, nightMineLeftSays, NIGHT_MINES_LEFT, cookTimeSays, rawCostSays, FOOD_POINTS_A_MINUTE, noteClimb, climbsLatelySays, bedFromPockets, portalToJudge, capLavaBeside, portalPickaxeFirst, endPortalActions, miningCandidates, portalSurfaceFirst, nightUpSays, oreToTunnel, gatherRests, gatherResting, relightPortalAt, stairPickaxeWanted, pickaxeForStair, siteHoldEnds, exploreLand, exploreLandIds, woodWhileUp, WOOD_UP, wantedItems, keepRoom, tidyMoment, smeltBatch, ladderSmeltWants, foodReservePrice, siteByLava, foodTrips, supportMaterialHere, preparePortalSupports, portalJobs, castSiteCost, castSiteSays, NO_WOOD_DEEP, smeltNeedSays, takeBackPlace, detourWork, restWork, restWorkSays, upkeepOffers, kitFoodStep, foodNearFrame, cookable, FUELS, answerOrPutOff, opensPit, persist, returnFromNether, climbSays, holdForRest, liveTurn, workClaim, methodSoFar, gatherBlocks, sculkStep, opensLava, descentTargets, portalInteriorBlockers, nearestLava, lavaGone, mineAtSource, timed, portalHere, walkToKnownPortal, portalWay, lineSays, buildPortalFrame, ruinSays, portalMethod, portalStep, crossingKitReady, walksFailed, occupant, bodyIn, occupiedSays, waitingThere, settleCraftInventory, tripTime, WOOD_RESERVE, woodUnits, crossingWater, sideTrips, plugLeak, leakResponse, logInView, patrolChoice, upkeepStep, moreOfSource, whileCooking, workstation, noteError, localBatch, takeOutBatch, castUnderWay, leftBatch, batchNoRoute, LEAVE_BATCH_MS, smelt, turnSearch, searchFor, enterPortal, gameHandlers, breakStillness, reachableBlocks, hitboxIntrudes, terrainShortage, runGoal, runIdle, idleWork, idleOptions, createSurvival, acquireStep, inventory, planningInventory, catalogPlan, selectSite, explore, dig, place, waitFor, constructionObservation, Blocked, designedBuildStep, surfaceStep, surfaceTrip, answerStall, looseEnds, breakOut, tunnelToward, stairsOrWay, craft, gatherWood, moveOnFromResource, moveOnHistorySays, pickaxeCraftHistorySays, maintainPickaxe, MOVE_ON_MEMORY_MS, PICKAXE_CRAFT_MEMORY_MS, stationCellOk, droppedFoodNear, planDueNow, planRoutes, lavaKnownFrom, straightToward };
+module.exports = { craftFromInventoryStep, restoreTemporaryPlacements, decideAction, atOwnDropsInWater, clearLineToOre, bedBackSays, takeUpFoodSays, woodLeftSays, oreUseSays, ruinSays, buildSays, mineAtSource, nightMineLeftSays, NIGHT_MINES_LEFT, cookTimeSays, rawCostSays, FOOD_POINTS_A_MINUTE, noteClimb, climbsLatelySays, bedFromPockets, portalToJudge, capLavaBeside, portalPickaxeFirst, endPortalActions, miningCandidates, portalSurfaceFirst, nightUpSays, oreToTunnel, gatherRests, gatherResting, relightPortalAt, stairPickaxeWanted, pickaxeForStair, siteHoldEnds, exploreLand, exploreLandIds, woodWhileUp, WOOD_UP, wantedItems, keepRoom, tidyMoment, smeltBatch, ladderSmeltWants, foodReservePrice, siteByLava, foodTrips, supportMaterialHere, preparePortalSupports, portalJobs, castSiteCost, castSiteSays, NO_WOOD_DEEP, smeltNeedSays, takeBackPlace, detourWork, restWork, restWorkSays, upkeepOffers, kitFoodStep, foodNearFrame, cookable, FUELS, answerOrPutOff, opensPit, persist, returnFromNether, climbSays, holdForRest, liveTurn, workClaim, methodSoFar, gatherBlocks, sculkStep, opensLava, descentTargets, portalInteriorBlockers, nearestLava, lavaGone, mineAtSource, timed, portalHere, walkToKnownPortal, portalWay, lineSays, buildPortalFrame, ruinSays, portalMethod, portalStep, crossingKitReady, walksFailed, occupant, bodyIn, occupiedSays, waitingThere, settleCraftInventory, tripTime, WOOD_RESERVE, woodUnits, crossingWater, sideTrips, plugLeak, leakResponse, logInView, patrolChoice, upkeepStep, moreOfSource, whileCooking, workstation, noteError, localBatch, takeOutBatch, castUnderWay, leftBatch, batchNoRoute, LEAVE_BATCH_MS, smelt, turnSearch, searchFor, enterPortal, gameHandlers, breakStillness, reachableBlocks, hitboxIntrudes, terrainShortage, runGoal, runIdle, idleWork, idleOptions, createSurvival, acquireStep, inventory, planningInventory, catalogPlan, selectSite, explore, dig, place, waitFor, constructionObservation, Blocked, designedBuildStep, surfaceStep, surfaceTrip, answerStall, looseEnds, breakOut, tunnelToward, stairsOrWay, craft, gatherWood, moveOnFromResource, moveOnHistorySays, pickaxeCraftHistorySays, maintainPickaxe, MOVE_ON_MEMORY_MS, PICKAXE_CRAFT_MEMORY_MS, stationCellOk, droppedFoodNear, planDueNow, planRoutes, lavaKnownFrom, straightToward };

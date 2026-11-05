@@ -18,6 +18,7 @@ class CommunityStartTests(unittest.TestCase):
         self.assertEqual(profile['persona_id'],'TolikScheben')
         self.assertTrue(profile['identity'])
         self.assertTrue(profile['motivations'])
+        self.assertEqual(environment['JEV_PERSONA_CRAFT_FROM_INVENTORY'],'1')
         self.assertNotIn('inherited-wrong-profile',environment['JEV_PERSONA_PROFILE'])
         self.assertNotIn('UNRELATED_SECRET',environment)
         self.assertLessEqual(len(environment['JEV_PERSONA_PROFILE'].encode('utf-8')),24576)

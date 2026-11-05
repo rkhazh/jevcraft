@@ -51,7 +51,7 @@ function unworkable(bot, spec) {
 }
 
 function createSession(config, client, { stateDirectory = path.join(__dirname, '..', '.bot-state'), recorder,
-  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false, personaLocalMove=false, personaVisit=false, personaProfile=null, mutationPolicy=null } = {}) {
+  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false, personaLocalMove=false, personaVisit=false, personaCraftFromInventory=false, personaProfile=null, mutationPolicy=null } = {}) {
   // Invalid configured identity fails before creating a connection. The
   // optional local profile does not delay reflexes on an HTTP handshake.
   if(personaProfile!==null&&!require('./persona-context').validProfile(personaProfile))throw new Error('Invalid configured persona profile');
@@ -893,6 +893,8 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         players:Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).map(p=>p.username),
         inventory:(bot.inventory?.items() || []).reduce((out,i)=>{out[i.name]=(out[i.name]||0)+i.count;return out;},{})}),
       impossible:spec=>unworkable(bot,spec), stop:scopedStop,
+      craftAffordances:()=>require('./persona-craft').capabilities(bot,{enabled:personaCraftFromInventory===true&&ready&&!ended}),
+      checkCraft:spec=>!!require('./persona-craft').plan(bot,spec),
       visitAffordances:principal=>visitApi.capabilities(bot,{known:world.known,principal,enabled:visitEnabled&&ready&&!ended}),
       resolveVisit:bot._personaVisitResolve,
       verifyVisit:goal=>visitApi.verifyVisit(bot,goal),

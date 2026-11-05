@@ -7,15 +7,20 @@ const progressCache=new WeakMap();
 // not another planner and not proof that a persona objective is complete.
 function nativeFeedback(goal,startedAt,now){
  const records=[];
+ const executionClock=Number.isFinite(startedAt)&&startedAt>=0&&startedAt<=now;
  const add=(entry,fields)=>{
   const at=Number.isFinite(entry.settledAt)?entry.settledAt:entry.at;
-  if(!Number.isFinite(entry.at)||entry.at>now||!Number.isFinite(at)||at>now)return;
-  records.push({...fields,observed_at:at/1000,predates_execution:Number.isFinite(startedAt)?entry.at<startedAt:null});
+  if(!Number.isFinite(entry.at)||entry.at<0||entry.at>now||!Number.isFinite(at)||at<entry.at||at>now)return;
+  // These sources record at different stages, so at is not a known start time.
+  // New settlement does not move an older record into this execution or make
+  // its spatial description current.
+  records.push({...fields,recorded_at:entry.at/1000,observed_at:at/1000,age_ms:now-at,predates_execution:executionClock?entry.at<startedAt:null});
  };
  for(const e of goal.tried?.entries||[])add(e,{source:'decision_ledger',action:text(e.method),question:text(e.q),target:point(e.target)||text(e.target),outcome:text(e.outcome),reason:text(e.why),gained:text(e.gained)});
  for(const e of Object.values(goal.survival?.attempts||{}))add(e,{source:'survival_attempt',action:text(e.action),target:point(e.target)||text(e.target),outcome:'blocked',reason:text(e.why),attempts:Number.isFinite(e.count)?e.count:null});
- for(const e of [].concat(goal.survival?.stanceFailed||[]))add(e,{source:'survival_stance',action:text(e.choice),target:point(e.where),outcome:'blocked',reason:text(e.why)});
- return {judgment:'controller_report',recent_attempts:records.sort((a,b)=>b.observed_at-a.observed_at).slice(0,12)};
+ for(const e of [].concat(goal.survival?.stanceFailed||[]))add(e,{source:'survival_stance',action:text(e.choice),actor_position:point(e.where),target:null,outcome:'blocked',reason:text(e.why)});
+ const bounded=records.sort((a,b)=>b.observed_at-a.observed_at).slice(0,12);
+ return {judgment:'controller_report',current_attempts:bounded.filter(e=>e.predates_execution===false),historical_attempts:bounded.filter(e=>e.predates_execution!==false)};
 }
 function executionSnapshot(bot,active,{now=Date.now(),verify=require('./persona-build').buildVerification}={}){
  const goal=active?.goal;if(!goal)return {status:'idle',goal_id:null,kind:null,step:null,interruption:null,build_progress:null};

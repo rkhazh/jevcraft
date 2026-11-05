@@ -36,14 +36,15 @@ test('native failures stay observable after lastError is cleared and across a ta
  assert.equal(s.step_source,'recorded_goal');
  assert.equal(s.current_turn.phase,'stance: seal');
  assert.equal(s.native_feedback.judgment,'controller_report');
- const [fight,food]=s.native_feedback.recent_attempts;
+ const [fight]=s.native_feedback.current_attempts,[food]=s.native_feedback.historical_attempts;
  assert.equal(fight.outcome,'blocked');assert.equal(fight.reason,'target has no reachable swing');assert.equal(fight.predates_execution,false);
  assert.equal(food.action,'food_search');assert.equal(food.attempts,3);assert.equal(food.predates_execution,true);
  // It is historical evidence, not a failure attributed to the new persona goal.
  const next=executionSnapshot({}, {goal:{kind:'craft',personaGoalId:'new',survival},startedAt:now},{now:now+1});
- assert.equal(next.native_feedback.recent_attempts[0].predates_execution,true);
- assert.equal(next.native_feedback.recent_attempts[0].source,'survival_stance');
- assert.equal(next.native_feedback.recent_attempts[0].goal_id,undefined);
+ assert.equal(next.native_feedback.current_attempts.length,0);
+ assert.equal(next.native_feedback.historical_attempts[0].predates_execution,true);
+ assert.equal(next.native_feedback.historical_attempts[0].source,'survival_stance');
+ assert.equal(next.native_feedback.historical_attempts[0].goal_id,undefined);
 });
 
 test('native decision outcomes preserve their own judgment, bounds, and redaction',()=>{
@@ -51,20 +52,22 @@ test('native decision outcomes preserve their own judgment, bounds, and redactio
  entries.push({q:'bad',method:'future',at:1000,outcome:'done'});
  const goal={kind:'obtain',tried:{entries}};
  const s=executionSnapshot({}, {goal,startedAt:90},{now:200});
- assert.equal(s.native_feedback.recent_attempts.length,12);
- assert.equal(s.native_feedback.recent_attempts[0].observed_at,.129);
- assert.equal(s.native_feedback.recent_attempts[0].outcome,'blocked');
- assert.equal(s.native_feedback.recent_attempts[0].reason,'token=[redacted]');
- assert.equal(s.native_feedback.recent_attempts[1].outcome,'progressed');
- assert.equal(s.native_feedback.recent_attempts[1].gained,'nearer target');
- entries[29].target.x=999;assert.equal(s.native_feedback.recent_attempts[0].target.x,29);
+ assert.equal(s.native_feedback.current_attempts.length,12);
+ assert.equal(s.native_feedback.current_attempts[0].observed_at,.129);
+ assert.equal(s.native_feedback.current_attempts[0].outcome,'blocked');
+ assert.equal(s.native_feedback.current_attempts[0].reason,'token=[redacted]');
+ assert.equal(s.native_feedback.current_attempts[1].outcome,'progressed');
+ assert.equal(s.native_feedback.current_attempts[1].gained,'nearer target');
+ entries[29].target.x=999;assert.equal(s.native_feedback.current_attempts[0].target.x,29);
 });
 
 test('a historical attempt settled now keeps its historical provenance',()=>{
  const goal={kind:'obtain',tried:{entries:[{q:'resource_source',method:'walk',at:90,settledAt:110,outcome:'blocked'}]}};
  const s=executionSnapshot({}, {goal,startedAt:100},{now:120});
- assert.equal(s.native_feedback.recent_attempts[0].observed_at,.110);
- assert.equal(s.native_feedback.recent_attempts[0].predates_execution,true);
+ assert.equal(s.native_feedback.current_attempts.length,0);
+ const attempt=s.native_feedback.historical_attempts[0];
+ assert.equal(attempt.observed_at,.110);assert.equal(attempt.recorded_at,.090);assert.equal(attempt.started_at,undefined);
+ assert.equal(attempt.predates_execution,true);assert.equal(attempt.age_ms,10);
 });
 
 test('survival reports retain action details without upgrading them to verified results',()=>{
@@ -82,9 +85,47 @@ test('recorded combat failure remains visible beside a stale recovery step',()=>
  const s=executionSnapshot(bot,{goal,startedAt:now-120000,idle:true},{now});
  assert.equal(s.step.action,'return_from_shaft');assert.equal(s.step_source,'recorded_goal');
  assert.equal(s.current_turn.phase,'stance: seal');assert.equal(s.interruption.last_error,null);
- assert.equal(s.native_feedback.recent_attempts[0].action,'fight');
- assert.match(s.native_feedback.recent_attempts[0].reason,/nothing was struck/);
- assert.equal(s.native_feedback.recent_attempts[0].outcome,'blocked');
- assert.ok(s.native_feedback.recent_attempts.some(e=>e.action==='food_search'&&e.predates_execution));
+ assert.equal(s.native_feedback.current_attempts[0].action,'fight');
+ assert.match(s.native_feedback.current_attempts[0].reason,/nothing was struck/);
+ assert.equal(s.native_feedback.current_attempts[0].outcome,'blocked');
+ assert.ok(s.native_feedback.historical_attempts.some(e=>e.action==='food_search'&&e.predates_execution));
  assert.equal(s.goal_id,null);
+});
+
+test('032503 persisted combat reports remain historical at a different actor position',()=>{
+ const fixture=require('./fixtures/tolik-historical-feedback-20261105.json');
+ const survival={stanceFailed:structuredClone(fixture.stanceFailed)},before=JSON.stringify(survival);
+ const goal={kind:'survive',step:{action:'persona_hold'},survival};
+ const s=executionSnapshot({entity:{position:fixture.actor_position}},{goal,startedAt:fixture.startedAt,idle:true},{now:fixture.now});
+ assert.equal(s.status,'holding');assert.equal(s.interruption.active,false);assert.equal(s.survival_action,null);
+ assert.deepEqual(s.native_feedback.current_attempts,[]);assert.equal(s.native_feedback.historical_attempts.length,6);
+ assert.equal(s.native_feedback.recent_attempts,undefined);
+ for(const report of s.native_feedback.historical_attempts){
+  assert.equal(report.predates_execution,true);assert.ok(report.age_ms>20000000);
+  assert.equal(report.target,null);assert.deepEqual(report.actor_position,fixture.stanceFailed[0].where);
+  assert.notDeepEqual(report.actor_position,fixture.actor_position);assert.equal(report.verified,undefined);
+ }
+ assert.equal(JSON.stringify(survival),before); // Reporting does not change native avoidance memory.
+});
+
+test('attempt clocks reject future or reversed evidence; uncertain execution scope stays historical',()=>{
+ const entries=[{method:'valid',at:100,settledAt:150,outcome:'blocked'},
+  {method:'future_start',at:201},{method:'future_settlement',at:100,settledAt:201},
+  {method:'reverse',at:140,settledAt:130},{method:'invalid_start',at:NaN}];
+ const goal={kind:'obtain',tried:{entries}};
+ const current=executionSnapshot({}, {goal,startedAt:100},{now:200}).native_feedback;
+ assert.equal(current.current_attempts.length,1);assert.deepEqual(current.historical_attempts,[]);
+ assert.equal(current.current_attempts[0].action,'valid');assert.equal(current.current_attempts[0].age_ms,50);
+ for(const startedAt of [undefined,NaN,201]){
+  const uncertain=executionSnapshot({}, {goal,startedAt},{now:200}).native_feedback;
+  assert.deepEqual(uncertain.current_attempts,[]);assert.equal(uncertain.historical_attempts.length,1);
+  assert.equal(uncertain.historical_attempts[0].predates_execution,null);
+ }
+});
+
+test('current and historical report partitions share the existing twelve-record bound',()=>{
+ const entries=Array.from({length:30},(_,i)=>({method:'walk',at:100+i,outcome:'blocked'}));
+ const feedback=executionSnapshot({}, {goal:{kind:'visit',tried:{entries}},startedAt:125},{now:200}).native_feedback;
+ assert.equal(feedback.current_attempts.length,5);assert.equal(feedback.historical_attempts.length,7);
+ assert.equal(feedback.current_attempts[0].observed_at,.129);assert.equal(feedback.historical_attempts.at(-1).observed_at,.118);
 });

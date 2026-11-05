@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === [...keys].sort().join();
 const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v) ? v.map(x=>JSON.parse(stable(x))) : Object.fromEntries(Object.keys(v).sort().map(k=>[k,JSON.parse(stable(v[k]))]))) : v);
-function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({}),visitAffordances=()=>({enabled:false,destinations:[]}),resolveVisit=()=>null,verifyVisit=()=>false}) {
+function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({}),visitAffordances=()=>({enabled:false,destinations:[]}),resolveVisit=()=>null,verifyVisit=()=>false,craftAffordances=()=>({enabled:false,items:[]}),checkCraft=()=>false}) {
  rendezvous=require('./persona-rendezvous').validateRendezvous(rendezvous);
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
  let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve(), actorProfile=null;
@@ -20,9 +20,10 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
  function emit(data) { const event={...data,event_id:randomUUID(),session_id:sessionId,sequence:++sequence,observed_at:Date.now()/1000}; if(data.type==='goal'&&['complete','blocked','failed','expired','cancelled'].includes(data.status))lastResult=structuredClone(event); log.push(event);if(log.length>1000)log.shift();return event; }
  function snapshot() {
   const state={...read(),actor_profile:{supported:true,persona_id:closed?null:actorProfile?.persona_id??null}}, id=randomUUID(), now=Date.now()/1000;
+  const craft=craftAffordances();
   const visit=visitAffordances(actorProfile?`persona:${actorProfile.persona_id}`:null);
-  observations.set(id,{at:now,mono:performance.now(),visit:structuredClone(visit)});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
-  return {...state,last_result:lastResult?structuredClone(lastResult):null,movement_capabilities:{allow_visible_players:allowVisiblePlayers,local_move:{...movementAffordances(),enabled:allowLocalMove,max_distance:16,arrival_distance:1.5},visit},rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
+  observations.set(id,{at:now,mono:performance.now(),visit:structuredClone(visit),craft:structuredClone(craft)});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
+  return {...state,craft_capabilities:craft,last_result:lastResult?structuredClone(lastResult):null,movement_capabilities:{allow_visible_players:allowVisiblePlayers,local_move:{...movementAffordances(),enabled:allowLocalMove,max_distance:16,arrival_distance:1.5},visit},rendezvous:rendezvous?structuredClone(rendezvous):null,items:items.filter(i=>state.items.includes(i)),players:state.players.slice(0,128),session_id:sessionId,observation_id:id,observed_at:now,world_id:worldId,active_goal_id:active?.proposal.goal_id??null};
  }
  function valid(id) {return !closed && active?.proposal.goal_id===id && active.deadline>performance.now();}
  function terminalDetails(spec,goal) {
@@ -55,7 +56,13 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   if(!observation||performance.now()-observation.mono>5000)return 'stale_observation';
   const state=read();if(!state.connected||state.health<8||!['overworld','minecraft:overworld'].includes(state.dimension))return 'unsafe_state';
   const s=p.spec;
-  if(['obtain','craft'].includes(s?.kind)) {if(!exact(s,['kind','item','count','deliver'])||!items.includes(s.item)||!state.items.includes(s.item)||!Number.isInteger(s.count)||s.count<1||s.count>64||s.deliver!==false)return 'unsupported_spec';}
+  if(['obtain','craft'].includes(s?.kind)) {
+   if(!exact(s,['kind','item','count','deliver'])||!state.items.includes(s.item)||!Number.isInteger(s.count)||s.count<1||s.count>64||s.deliver!==false)return 'unsupported_spec';
+   if(s.kind==='craft'&&observation.craft?.enabled){
+    if(!observation.craft.items?.includes(s.item)||!craftAffordances().enabled)return 'unsupported_craft';
+    try{if(!checkCraft(s))return 'craft_inputs_unavailable';}catch(error){return {reason:'craft_inputs_unavailable',detail:String(error.message).slice(0,240)};}
+   }else if(!items.includes(s.item))return 'unsupported_spec';
+  }
   else if(['follow','come'].includes(s?.kind)){if(!exact(s,['kind','target'])||!(players.includes(s.target)||(allowVisiblePlayers&&state.players.includes(s.target)&&state.player_identities?.some(p=>p.name===s.target&&/^[0-9a-f-]{36}$/i.test(p.uuid))))||(!state.players.includes(s.target)&&!(s.kind==='come'&&rendezvous?.target===s.target&&['overworld','minecraft:overworld'].includes(state.dimension))))return 'unsupported_spec';}
   else if(s?.kind==='move'){if(!allowLocalMove||!exact(s,['kind','target'])||!exact(s.target,['x','y','z'])||![s.target.x,s.target.y,s.target.z].every(Number.isFinite)||!checkMove(s.target))return 'unsupported_move';if(state.position&&Math.hypot(state.position.x-s.target.x,state.position.y-s.target.y,state.position.z-s.target.z)<=1.5)return 'already_at_move_target';}
   else if(s?.kind==='visit'){
@@ -84,9 +91,10 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   const admittedAt=Date.now(),expiresAt=p.spec.kind==='visit'?Math.min(p.expires_at,(admittedAt+60000)/1000):p.expires_at;
   const destination=p.spec.kind==='visit'?structuredClone(resolveVisit(p.spec.target,`persona:${p.persona_id}`)):null;
   const visit=destination?{destination,personaVisitPolicy:{destination:structuredClone(destination),startedAt:admittedAt},navigationOnly:true,personaHold:true}:{};
+  const craft=p.spec.kind==='craft'&&observations.get(p.observation_id)?.craft?.enabled?{personaCraftPolicy:{source:'carried_inventory'},personaHold:true}:{};
   const current={proposal:structuredClone(p),deadline:performance.now()+(expiresAt-Date.now()/1000)*1000};active=current;
   current.timer=setTimeout(()=>enqueue(()=>cancelNow(p.goal_id,'expired')).catch(()=>{}),Math.max(1,current.deadline-performance.now()));current.timer.unref();
-  try{await start({...p.spec,...visit,...(p.spec.kind==='come'&&rendezvous?.target===p.spec.target?{requesterPosition:{...rendezvous.position}}:{}),...(p.persona_context?{personaContext:structuredClone(p.persona_context)}:{}),personaGoalId:p.goal_id,personaSessionId:sessionId,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='build'?p.spec.request:p.spec.kind==='move'?`Move locally to (${p.spec.target.x}, ${p.spec.target.y}, ${p.spec.target.z})`:p.spec.kind==='visit'?`Visit the last-known reference for ${destination.label}`:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
+  try{await start({...p.spec,...visit,...craft,...(p.spec.kind==='come'&&rendezvous?.target===p.spec.target?{requesterPosition:{...rendezvous.position}}:{}),...(p.persona_context?{personaContext:structuredClone(p.persona_context)}:{}),personaGoalId:p.goal_id,personaSessionId:sessionId,personaId:p.persona_id,from:`persona:${p.persona_id}`,request:p.spec.kind==='build'?p.spec.request:p.spec.kind==='move'?`Move locally to (${p.spec.target.x}, ${p.spec.target.y}, ${p.spec.target.z})`:p.spec.kind==='visit'?`Visit the last-known reference for ${destination.label}`:['obtain','craft'].includes(p.spec.kind)?`${p.spec.kind} ${p.spec.count} ${p.spec.item}`:`${p.spec.kind} ${p.spec.target}`});}
   catch(err){await cancelNow(p.goal_id,'failed');return rejection(p,'start_failed');}
   if(!valid(p.goal_id)){await cancelNow(p.goal_id,'expired');return rejection(p,'expired');}
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:expiresAt};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;

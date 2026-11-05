@@ -1,0 +1,15 @@
+{
+  "source": "replay-runs/20261105T032503.885607Z/observations.jsonl:79",
+  "normalization": "Six unchanged observed attempts. Execution epoch normalized to this run start; later entity presence is not recorded.",
+  "now": 1793849240888,
+  "startedAt": 1793849107000,
+  "actor_position": {"x": -474.49991002026655, "y": 66, "z": -390.63625478303214},
+  "stanceFailed": [
+    {"choice": "seal", "where": {"x": -536, "y": 62, "z": -398}, "at": 1793828531875, "why": null},
+    {"choice": "seal", "where": {"x": -536, "y": 62, "z": -398}, "at": 1793828531638, "why": null},
+    {"choice": "fight", "where": {"x": -536, "y": 62, "z": -398}, "at": 1793828530105, "why": "nothing was struck: the pillager 2.4 blocks off is 2 blocks above the feet and out of the sword's reach from where the bot stands (no clear swing at it), and the run at the pillager 2.4 blocks off found no way to it"},
+    {"choice": "fight", "where": {"x": -536, "y": 62, "z": -398}, "at": 1793828528430, "why": "nothing was struck: the pillager 2.4 blocks off is 2 blocks above the feet and out of the sword's reach from where the bot stands (no clear swing at it), and the run at the pillager 2.4 blocks off found no way to it"},
+    {"choice": "seal", "where": {"x": -536, "y": 62, "z": -398}, "at": 1793828526770, "why": null},
+    {"choice": "seal", "where": {"x": -536, "y": 62, "z": -398}, "at": 1793828519900, "why": null}
+  ]
+}
