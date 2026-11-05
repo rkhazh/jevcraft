@@ -3300,7 +3300,8 @@ async function workstation(bot, task, name, goal) {
   // Use a carried table nearby instead of spending ingredients/scaffolding
   // walking back to a distant bench. Existing nearby player tables may still
   // be reused, but only tables placed by this session are collected afterward.
-  const candidates = find(bot, [name], name === 'crafting_table' && countOf(bot, name) ? 4 : 32, 8);
+  const stationPermitted=p=>name!=='furnace'||require('./mutation-authority').queryMutation(bot,'container_withdraw',p).allowed;
+  const candidates = find(bot, [name], name === 'crafting_table' && countOf(bot, name) ? 4 : 32, 8).filter(stationPermitted);
   const existing = await approachWorkstation(bot, task, name, candidates);
   if (existing) return existing;
   if (!countOf(bot, name)) throw new Blocked(`I can't reach a ${name.replaceAll('_', ' ')}. I need one I can use.`);
@@ -3311,7 +3312,7 @@ async function workstation(bot, task, name, goal) {
   for (const dy of [0, -1, 1, -2, 2]) for (let dx = -2; dx <= 2 && !p && tries < 3; dx++) for (let dz = -2; dz <= 2 && !p && tries < 3; dz++) {
     if (!dx && !dz) continue;
     const q = o.offset(dx, dy, dz);
-    if (!stationCellOk(bot, goal, q)) continue;
+    if (!stationPermitted(q)||!stationCellOk(bot, goal, q)) continue;
     tries++;
     try { await place(bot, task, q, name); }
     catch (err) {
@@ -3334,7 +3335,7 @@ async function workstation(bot, task, name, goal) {
   if (!p) {
     const notch = [0, 1].flatMap(dy => faces.slice(1, 5).map(d => o.plus(d).offset(0, dy, 0))).find(q => {
       const b = bot.blockAt(q);
-      return b?.boundingBox === 'block' && b.diggable && !reservedForConstruction(goal || {}, q, { from: o }) && bot.blockAt(q.offset(0, -1, 0))?.boundingBox === 'block' &&
+      return stationPermitted(q)&&b?.boundingBox === 'block' && b.diggable && !reservedForConstruction(goal || {}, q, { from: o }) && bot.blockAt(q.offset(0, -1, 0))?.boundingBox === 'block' &&
         !faces.some(f => /lava|water/.test(bot.blockAt(q.plus(f))?.name || ''));
     });
     if (notch) {
@@ -3766,6 +3767,9 @@ async function loadSideFurnaces(bot, task, goal, save, main, { item, from, fuelI
   // Each way out said (note 2488): full-87 (2026-10-29 12:02Z) cooked 20 raw iron in one furnace, 200 seconds, no side one
   // loaded and nothing said why.
   const none = why => { console.log(`[smelt] no side furnace for ${total} ${from}: ${why}`); return 0; };
+  const permitted=p=>require('./mutation-authority').queryMutation(bot,'container_withdraw',p).allowed;
+  const near=bot.entity.position.floored();
+  if(![-1,0,1].some(dy=>Array.from({length:25},(_,i)=>near.offset(i%5-2,dy,Math.floor(i/5)-2)).some(permitted)))return none('no standing container permission for a nearby side furnace');
   if (!fuel) return none(`no fuel carried for ${total} beside the main furnace's`);
   const share = Math.floor(total / furnaces);
   const stone = countOf(bot, 'cobblestone') + countOf(bot, 'cobbled_deepslate') + countOf(bot, 'blackstone');
@@ -3781,7 +3785,7 @@ async function loadSideFurnaces(bot, task, goal, save, main, { item, from, fuelI
     let cell = null;
     for (const dy of [0, 1, -1]) for (let dx = -2; dx <= 2 && !cell; dx++) for (let dz = -2; dz <= 2 && !cell; dz++) {
       const q = o.offset(dx, dy, dz);
-      if ((dx || dz) && !taken.some(t => t.equals(q)) && stationCellOk(bot, goal, q)) cell = q;
+      if ((dx || dz) && permitted(q) && !taken.some(t => t.equals(q)) && stationCellOk(bot, goal, q)) cell = q;
     }
     // None open: a cell dug out of the wall beside the feet, as a player makes room in a tunnel (note 2493). The open cells
     // asked for were none in a staircase or a one-wide tunnel: '[smelt] no cell for a side furnace within 2 of (-58, 4,
@@ -3790,7 +3794,7 @@ async function loadSideFurnaces(bot, task, goal, save, main, { item, from, fuelI
       const liquid = q => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([x, y, z]) => /water|lava/.test(bot.blockAt(q.offset(x, y, z))?.name || ''));
       for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const q = o.offset(dx, 0, dz), b = bot.blockAt(q);
-        if (!b || taken.some(t => t.equals(q)) || !/^(stone|deepslate|tuff|andesite|diorite|granite|dirt|cobblestone|cobbled_deepslate|netherrack|calcite)$/.test(b.name)) continue;
+        if (!b || !permitted(q) || taken.some(t => t.equals(q)) || !/^(stone|deepslate|tuff|andesite|diorite|granite|dirt|cobblestone|cobbled_deepslate|netherrack|calcite)$/.test(b.name)) continue;
         if (bot.blockAt(q.offset(0, -1, 0))?.boundingBox !== 'block' || liquid(q)) continue;
         try { await dig(bot, task, q, { requireDrops: false }); } catch (err) { task.check(); if (STATION_FATAL.has(err.name)) throw err; continue; }
         if (stationCellOk(bot, goal, q)) { cell = q; console.log(`[smelt] a cell dug for a side furnace at ${q}`); break; }
@@ -3984,6 +3988,7 @@ async function smelt(bot, task, step, goal, save = () => {}) {
     if (!block) { save(); throw new Blocked("I can't reach the furnace holding our saved batch"); }
     delete pending.unreachable;
   } else block = await workstation(bot, task, 'furnace', goal);
+  if(!require('./interaction-guard').containerAllowed(bot,block))throw new (require('./interaction-guard').InteractionRefused)('processing_container_requires_standing_grant');
   const before = countOf(bot, step.item);
   // A new batch is only as large as the raw input carried: a smelt of four
   // gold with one raw gold in hand left the batch in that furnace while the
@@ -4967,7 +4972,7 @@ async function reachableBlocks(bot, task, candidates, { limit = 16, budgetMs = 3
 
 async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = () => {}) {
   task.check();
-  require('./persona-build').assertBuildPolicy(goal);
+  require('./persona-build').assertBuildPolicy(goal,bot);
   if (goal.personaBuildReturn) {
     const destination=goal.personaBuildReturn.target, at=new Vec3(destination.x,destination.y,destination.z);
     if(bot.entity.position.distanceTo(at)>8){
@@ -5090,7 +5095,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
   if (!goal.blueprint) {
     // Anchor the site where the player asked for it, and treat Jev's own past
     // structures as ground to stand on and material to build into.
-    const acceptOrigin = origin => require('./persona-build').siteAllowed(goal.personaBuildPolicy?.site_binding,origin,schematic.source.size,dimensionName(bot));
+    const acceptOrigin = origin => require('./persona-build').siteAllowed(goal.personaBuildPolicy?.site_binding,origin,schematic.source.size,dimensionName(bot))&&require('./persona-build').schematicAuthorityAllowed(bot,schematic,origin,goal.buildId||goal.buildContinuation?.target);
     const registry = bot.buildRegistry;
     const edited = goal.buildContinuation?.mode === 'edit' ? registry?.find(goal.buildContinuation.target) : null;
     // When the designer says where the old building sits in its new drawing,
@@ -5115,6 +5120,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     // not where a player pointed. When nothing fits there, anywhere near will do.
     if (!goal.blueprint && goal.buildAnchor && goal.dream && !at) { delete goal.buildAnchor; goal.blueprint = selectSchematicSite(bot, schematic, { owned, protect, acceptOrigin }); }
     if (!goal.blueprint) {
+      if(require('./mutation-authority').hasMutationAuthority(bot))throw Object.assign(new Blocked('No surveyed building site fits the standing permitted cells'),{personaBuildTerminal:!!goal.personaBuildPolicy});
       // Wandering off to find ground elsewhere is the wrong answer to a spot
       // the player chose: they asked for it there, so say it will not work.
       if (edited) throw new Blocked(`I cannot fit that change onto ${edited.name} where it stands. Ask me again and I will plan it differently.`);
@@ -5123,7 +5129,7 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
       await explore(bot, task, goal, save, 'supported building site', { surfaceOnly: true });
       return false;
     }
-    require('./persona-build').assertBuildPolicy(goal);
+    require('./persona-build').assertBuildPolicy(goal,bot);
     task.check();
     // The building being changed is Jev's own work, not player property:
     // without this the site-changed guard rejects its own walls. Only that

@@ -835,7 +835,7 @@ const stateOf = (bot, ctx) => ctx.state || (bot ? (bot._arbiter ||= {}) : (ctx.s
 function rule(bot, claims, ctx = {}) {
   const now = ctx.now ?? Date.now();
   const state = stateOf(bot, ctx);
-  const live = (claims || []).filter(Boolean);
+  const live = (claims || []).filter(c => c && require('./persona-idle').claimEligible(ctx.goal, c));
   const reflexes = live.filter(c => c.urgency === 'body').sort((a, b) => (REFLEX_RANK[a.reflex] ?? 99) - (REFLEX_RANK[b.reflex] ?? 99));
   // Held to two past its line, reflex or alert alike (observeReflexes).
   state.reflexes = [...new Set(live.map(c => c.reflex || c.alert).filter(Boolean))];
@@ -951,7 +951,7 @@ function fightStands(bot, live = [], seen = null) {
 }
 async function take(bot, claims, ctx = {}) {
   const state = stateOf(bot, ctx);
-  const live = (claims || []).filter(Boolean);
+  const live = (claims || []).filter(c => c && require('./persona-idle').claimEligible(ctx.goal, c));
   const r = await arbitrate(bot, live, { ...ctx, run: false });
   const now = ctx.now ?? Date.now();
   const unclaimed = !live.some(c => c.layer === 'survival');

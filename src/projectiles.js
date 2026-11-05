@@ -107,6 +107,7 @@ async function shootBow(bot, task, target, { guard = () => {}, threatCheck = che
       bot.entities[target.id] !== target || target.isValid === false || bot.entity.position.distanceTo(start) > .3 || !standing(bot, bot.entity.position)) {
       throw new Error('Bow shot interrupted by a changed target, dimension or firing position');
     }
+    require('./interaction-guard').assertAttack(bot, target, { shot: true });
   };
   check();
   const bow = bot.inventory.items().find(i => i.name === 'bow' && (i.durabilityUsed || 0) < bot.registry.itemsByName.bow.maxDurability - 1);
@@ -190,7 +191,7 @@ async function throwAt(bot, task, target, { guard = () => {}, item = null, confi
   const held = item || THROWABLE.find(n => countOf(bot, n) > 0);
   const stack = held && bot.inventory.items().find(i => i.name === held);
   if (!stack) throw new Error('Nothing to throw is carried');
-  const check = () => { task.check(); guard(); if (bot.health <= 0 || bot.entities[target.id] !== target || target.isValid === false) throw new Error('Throw interrupted by a changed target'); };
+  const check = () => { task.check(); guard(); if (bot.health <= 0 || bot.entities[target.id] !== target || target.isValid === false) throw new Error('Throw interrupted by a changed target'); require('./interaction-guard').assertAttack(bot, target, { shot: true }); };
   check();
   let solution = aimAtEntity(bot, target, new Vec3(0, 0, 0), bot.entity.position, THROWN);
   if (!solution) throw new Error('No clear observed throw to this target');

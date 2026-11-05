@@ -5,6 +5,7 @@ const { goals } = require('mineflayer-pathfinder');
 const { checkAir } = require('./vitals');
 const { checkThreats } = require('./danger');
 const { countOf } = require('./skills');
+const {queryMutation,filterMutationCells,hasMutationAuthority}=require('./mutation-authority');
 
 // Villages, remembered the way portals are: a list on the goal, per
 // dimension, deduplicated by distance. A village is what the beat-the-game
@@ -199,15 +200,22 @@ function ripeCrops(bot, centre, radius = 32) {
 // The forage option: what the village has to eat, when it is remembered
 // within reach. Ripe crops and hay counts are read off the world when the
 // village is loaded, and off memory when it is not.
-function villageFood(bot, goal) {
+function villageFood(bot, goal, {onBlocked}={}) {
   const near = knownVillages(bot, goal, FOOD_REACH)[0];
   if (!near) return null;
   const { village, distance } = near;
   const centre = village.bell || village;
   const loaded = !!bot.blockAt?.(pos(centre));
-  const crops = loaded ? ripeCrops(bot, centre).length : 0;
-  const hay = loaded ? findAll(bot, ['hay_block'], { radius: VILLAGE_RADIUS, count: 64, point: pos(centre) }).length : village.hay || 0;
-  if (loaded) village.hay = hay;
+  const cropCells = loaded ? ripeCrops(bot, centre).map(c=>c.position) : [];
+  const hayCells = loaded ? findAll(bot, ['hay_block'], { radius: VILLAGE_RADIUS, count: 64, point: pos(centre) }) : [];
+  if (loaded) village.hay = hayCells.length;
+  if(!loaded&&hasMutationAuthority(bot)){
+    if(village.hay)onBlocked?.({source:'village_food',operation:'dig',reason:'resource_cells_not_loaded',position:plain(centre),known_candidates:village.hay,permitted_candidates:0});
+    return null;
+  }
+  const options={source:'village_food',onBlocked};
+  const crops=filterMutationCells(bot,'dig',cropCells,options).length;
+  const hay=loaded?filterMutationCells(bot,'dig',hayCells,options).length:village.hay||0;
   if (!crops && !hay) return null;
   return { village, distance, ripeCrops: crops, hayBales: hay, loaded };
 }
@@ -218,9 +226,13 @@ function villageFood(bot, goal) {
 async function eatFromVillage(bot, task, goal, save, village, actions) {
   task.check(); checkAir(bot);
   const centre = village.bell || village;
+  if(hasMutationAuthority(bot)){
+    let blocked;const food=villageFood(bot,{villages:[village]},{onBlocked:f=>{blocked=f;}});
+    if(!food&&blocked)throw Object.assign(new Error(`Village food is unavailable: ${blocked.reason} at (${blocked.position.x}, ${blocked.position.y}, ${blocked.position.z})`),{name:'StructureMutationRefused',mutationReason:blocked.reason});
+  }
   await walkToVillage(bot, task, village, actions);
   const before = { wheat: countOf(bot, 'wheat'), carrot: countOf(bot, 'carrot'), potato: countOf(bot, 'potato') };
-  const crops = ripeCrops(bot, centre).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position)).slice(0, 8);
+  const crops = ripeCrops(bot, centre).filter(c=>queryMutation(bot,'dig',c.position).allowed).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position)).slice(0, 8);
   const replant = [];
   for (const { position, block } of crops) {
     task.check(); checkAir(bot); checkThreats(bot);
@@ -248,6 +260,7 @@ async function eatFromVillage(bot, task, goal, save, village, actions) {
   const enough = () => countOf(bot, 'wheat') + countOf(bot, 'hay_block') * 9 >= 3;
   if (!enough()) {
     const bales = findAll(bot, ['hay_block'], { radius: VILLAGE_RADIUS, count: 8, point: pos(centre) })
+      .filter(p=>queryMutation(bot,'dig',p).allowed)
       .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position)).slice(0, 2);
     for (const bale of bales) {
       if (enough()) break;

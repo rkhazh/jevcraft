@@ -4,7 +4,7 @@ const {validateSchematic,buildPalette}=require('./designer');
 const {matchesBuildBlock,buildFootprint,matchesOwnership,unchangedOriginalFoundation,personaBuildCellStatus}=require('./build-blocks');
 const LIMITS=Object.freeze({max_blocks:1024,max_size:[24,16,24],max_regions:64});
 const dimension=value=>String(value||'').replace(/^minecraft:/,'');
-function fail(message){const code=({'building disabled':'building_disabled','unknown or unowned structure':'build_not_owned','structure out of reach':'build_out_of_range','structure changed by another builder':'build_structure_changed','edit needs loaded structure blocks':'build_chunks_unloaded'})[message]||'build_policy_rejected';throw Object.assign(new Error(`Persona build: ${message}`),{name:'PersonaBuildPolicy',code});}
+function fail(message,terminal=false){const code=({'building disabled':'building_disabled','unknown or unowned structure':'build_not_owned','structure out of reach':'build_out_of_range','structure changed by another builder':'build_structure_changed','edit needs loaded structure blocks':'build_chunks_unloaded'})[message]||'build_policy_rejected';throw Object.assign(new Error(`Persona build: ${message}`),{name:'PersonaBuildPolicy',code,...(terminal?{personaBuildTerminal:true}:{})});}
 function validate(source,registry) {
  if(!source||Object.keys(source).sort().join()!==['name','description','size','palette','regions','entrance','existingOffset','site'].sort().join()||!Array.isArray(source.size)||source.size.some((n,i)=>n>LIMITS.max_size[i])||!Array.isArray(source.regions)||source.regions.length>LIMITS.max_regions||source.site!==null)fail('schematic exceeds policy');
  if(Buffer.byteLength(JSON.stringify(source))>24000)fail('schematic too large');
@@ -34,6 +34,20 @@ function siteAllowed(binding,origin,size,dim='overworld') {
 function assertSite(binding,origin,dim,size) {
  if(!siteAllowed(binding,origin,size,dim))throw Object.assign(new Error('Structure is outside the requested build site'),{code:'build_site_mismatch'});
 }
+function buildAuthorityDenial(bot,blueprint,projectId){
+ const authority=require('./mutation-authority');if(!bot||!authority.hasMutationAuthority(bot)||!blueprint)return null;
+ for(const [operation,list]of [['place',[...(blueprint.blocks||[]).flatMap(buildFootprint),...(blueprint.terrain?.fill||[])]],['dig',[...(blueprint.empty||[]),...(blueprint.terrain?.clear||[])]]]){
+  // Admission may authorize a return before the known project's chunks load.
+  // Execution always requires loaded cells again at method and packet checks.
+  for(const p of list){const result=authority.queryMutation(bot,operation,new Vec3(p.x,p.y,p.z),{build:true,projectId,scopeOnly:true});if(!result.allowed)return {position:{x:p.x,y:p.y,z:p.z},operation,reason:result.reason};}
+ }
+ return null;
+}
+function assertBuildAuthority(bot,blueprint,projectId){const denied=buildAuthorityDenial(bot,blueprint,projectId);if(denied)fail(`standing edit permission required for ${denied.operation} at (${denied.position.x}, ${denied.position.y}, ${denied.position.z}): ${denied.reason}`,true);}
+function schematicAuthorityAllowed(bot,design,origin,projectId){
+ const translate=list=>(list||[]).map(p=>({...p,x:p.x+origin.x,y:p.y+origin.y,z:p.z+origin.z}));
+ return !buildAuthorityDenial(bot,{blocks:translate(design.blocks),empty:translate(design.empty)},projectId);
+}
 function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  if(!enabled)fail('building disabled');
  const here={...bot.entity.position}, binding=siteBinding(spec.site_binding);
@@ -54,7 +68,7 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  if(['finish','repair'].includes(spec.mode)){
   if(spec.schematic!==null||!entry?.design?.source)fail('continuation needs saved design');
   const design=validate(entry.design.source,bot.registry);
-  assertBuildPolicy({...base,design,blueprint:entry.blueprint});
+  assertBuildPolicy({...base,design,blueprint:entry.blueprint,buildId:entry.id},bot);
   return {...base,buildOwned:structuredClone(entry.buildOwned||{}),continueBuild:{id:entry.id,mode:spec.mode}};
  }
  if(!['fresh','edit'].includes(spec.mode))fail('unsupported mode');
@@ -62,9 +76,12 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  const design=validate(spec.schematic,bot.registry);
  if(spec.mode==='fresh'){
   if(spec.build_id!==null||design.existingOffset!==null)fail('fresh structure cannot replace existing work');
+  if(!require('./mutation-authority').hasStandingBuildScope(bot))fail('standing edit permission required for a new structure',true);
   return {...base,design};
  }
  if(!design.existingOffset)fail('edit must align existing structure');
+ const origin={x:entry.origin.x-design.existingOffset[0],y:entry.origin.y-design.existingOffset[1],z:entry.origin.z-design.existingOffset[2]};
+ if(!schematicAuthorityAllowed(bot,design,origin,entry.id))fail('standing edit permission required for the proposed structure cells',true);
  if(!base.personaBuildReturn)verifiedEditOwnership(bot,entry);
  return {...base,design,buildId:entry.id,buildAnchor:{...entry.origin},buildContinuation:{mode:'edit',target:entry.id,name:entry.name,placement:'beside_target'}};
 }
@@ -82,7 +99,7 @@ function verifiedEditOwnership(bot,entry) {
  }
  return owned;
 }
-function assertBuildPolicy(goal) {
+function assertBuildPolicy(goal,bot) {
  if(!goal.personaBuildPolicy)return;
  const source=goal.design?.source;
  if(source&&(source.size.some((n,i)=>n>LIMITS.max_size[i])||source.regions.length>LIMITS.max_regions))fail('design exceeds policy');
@@ -93,6 +110,7 @@ function assertBuildPolicy(goal) {
  if(clear.length+fill.length>2048)fail('earthworks exceed policy');
  const cells=[...bp.blocks,...(bp.empty||[]),...clear,...fill],anchor=goal.personaBuildPolicy.anchor;
  if(cells.length>14000||cells.some(p=>![p.x,p.y,p.z].every(Number.isFinite)||Math.hypot(p.x-anchor.x,p.y-anchor.y,p.z-anchor.z)>64))fail('site exceeds admitted radius');
+ assertBuildAuthority(bot,bp,goal.buildId||goal.continueBuild?.id||goal.buildContinuation?.target);
 }
 function buildVerification(bot,goal) {
  const report={verified:false,exact_material_match:false,matched_blocks:0,retained_blocks:0,retained_enclosed_natural:[],mismatched_blocks:0,unknown_blocks:0,blocked_empty:0,samples:[]};
@@ -150,4 +168,4 @@ function describeBuilds(bot) {
   };
  });
 }
-module.exports={siteAllowed,siteCenter,LIMITS,prepareBuild,assertBuildPolicy,verifyBuild,capabilities,describeBuilds,verifiedEditOwnership,buildVerification};
+module.exports={siteAllowed,siteCenter,schematicAuthorityAllowed,LIMITS,prepareBuild,assertBuildPolicy,verifyBuild,capabilities,describeBuilds,verifiedEditOwnership,buildVerification};

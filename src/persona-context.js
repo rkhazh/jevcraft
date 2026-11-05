@@ -14,7 +14,7 @@ function validContext(c,now=Date.now()/1000){
  if(v!==null&&(!keys(v,['observed_at','summary'])||!Number.isFinite(v.observed_at)||v.observed_at>now+1||now-v.observed_at>300||!text(v.summary,800)))return false;
  return Buffer.byteLength(JSON.stringify(c),'utf8')<=6000;
 }
-function withPersonaContext(client,getGoal,isCurrent,{now=()=>Date.now()/1000,getProfile=()=>null}={}){
+function withPersonaContext(client,getGoal,isCurrent,{now=()=>Date.now()/1000,getProfile=()=>null,getMutationAuthority=()=>null}={}){
  return {systemOne(args){
   const goal=getGoal();
   // A caller cannot smuggle its own context through a state object or retain a
@@ -22,6 +22,9 @@ function withPersonaContext(client,getGoal,isCurrent,{now=()=>Date.now()/1000,ge
   const state=args.state&&typeof args.state==='object'&&!Array.isArray(args.state)?{...args.state}:{observation:args.state};
   delete state.persona_context;
   delete state.actor_profile;
+  delete state.mutation_authority;
+  const authority=getMutationAuthority();
+  if(authority)state.mutation_authority=structuredClone(authority);
   const profile=getProfile(),standing=validProfile(profile);
   if(standing)state.actor_profile={...structuredClone(profile),authority:'Configured character identity and values, not a task or permission. Offered methods describe physical possibilities, not ownership or authorization. Current world evidence, survival priorities, and hard policy remain authoritative.'};
   if(goal?.personaContext&&isCurrent(goal)){

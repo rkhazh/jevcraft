@@ -38,8 +38,11 @@ const STRUCK_MS = 30000;
 // Three blocks nearer within three seconds: an enderman walks about a block
 // a second when it wanders.
 const ENDERMAN_WINDOW_MS = 3000, ENDERMAN_CLOSING = 3;
-function provoked(bot, entity) {
-  if (bot._provokedMobs?.get(entity.id) === entity) return true;
+function provoked(bot, entity, { observedOnly = false } = {}) {
+  // A resource hunt can reserve its intended victim here before any attack.
+  // That intent remains useful to the existing danger loop, but cannot grant
+  // shared-world permission to harm an otherwise calm entity.
+  if (!observedOnly && bot._provokedMobs?.get(entity.id) === entity) return true;
   if (entity.name === 'enderman') {
     const key = bot.registry?.entitiesByName?.enderman?.metadataKeys?.indexOf('creepy');
     if (!(key >= 0 && entity.metadata?.[key])) return false;
@@ -96,11 +99,11 @@ function litForSpider(bot, entity) {
   return Math.max(cell.skyLight ?? 0, cell.light ?? 0) >= 12;
 }
 
-function hostileEntities(bot, radius = 24) {
+function hostileEntities(bot, radius = 24, { observedOnly = false } = {}) {
   const position = bot.entity.position;
   const daytime = bot.time?.timeOfDay < DAY.DARK || bot.time?.timeOfDay >= DAY.DAWN;
   return Object.values(bot.entities || {}).filter(entity => {
-    if ((!hostileNames.has(entity.name) && !provoked(bot, entity) && !unprovokedThreat(bot, entity)) || !entity.position || entity.isValid === false || observedDead(bot, entity)) return false;
+    if ((!hostileNames.has(entity.name) && !provoked(bot, entity, { observedOnly }) && !unprovokedThreat(bot, entity)) || !entity.position || entity.isValid === false || observedDead(bot, entity)) return false;
     // A spider turns by day when a spider hits the bot, not when anything
     // does: a fall or a fire set every spider in view back on it.
     // Calm is the daylight where the spider stands, not the hour: the game
@@ -114,7 +117,7 @@ function hostileEntities(bot, radius = 24) {
     // The truce ends when a piglin strikes, not when anything does: a
     // blaze's fire ended it too, and the swing reflex then started a second
     // fight with a whole group of them.
-    if (entity.name === 'piglin' && wearingGold(bot) && !provoked(bot, entity)) return false;
+    if (entity.name === 'piglin' && wearingGold(bot) && !provoked(bot, entity, { observedOnly })) return false;
     // A hoglin with a warped fungus, a nether portal or a respawn anchor
     // within its sensing box drops its target and attacks nothing while it
     // stays that near, struck or not (hoglin-repellent.js, note 587).

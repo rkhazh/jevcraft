@@ -5,6 +5,12 @@ const {TypeSafe}=require('../src/typesafe'),{AttemptBudget}=require('../src/atte
 const {createSession}=require('../src/session'),{communityAuth}=require('../src/community-auth');
 async function main(){
  const profile=require('../src/community-profile').communityProfile(process.env.JEV_COMMUNITY_CHARACTER||'Skipper');
+ const encoded=process.env.JEV_PERSONA_PROFILE;
+ if(typeof encoded!=='string'||Buffer.byteLength(encoded,'utf8')>24576)throw new Error('Configured community persona required');
+ const personaProfile=JSON.parse(encoded);
+ if(!require('../src/persona-context').validProfile(personaProfile)||personaProfile.persona_id!==profile.character)throw new Error('Invalid configured community persona');
+ const authority=require('../src/mutation-authority'),authorityScope={worldId:profile.worldId,principal:profile.username};
+ const mutationPolicy=process.env.JEV_MUTATION_AUTHORITY?authority.loadMutationAuthority(process.env.JEV_MUTATION_AUTHORITY,authorityScope):authority.validateMutationAuthority({version:1,world_id:profile.worldId,principal:profile.username,temporary_empty_placement:true,grants:[]},authorityScope);
  const rendezvous=require('../src/persona-rendezvous').validateRendezvous(process.env.JEV_COMMUNITY_RENDEZVOUS?JSON.parse(process.env.JEV_COMMUNITY_RENDEZVOUS):null);
  const directory=process.env.JEV_COMMUNITY_RUN_DIRECTORY;
  if(!directory||!path.isAbsolute(directory))throw new Error('Community run directory required');
@@ -27,7 +33,7 @@ async function main(){
  timer=setTimeout(()=>stop('600-second maximum elapsed'),seconds*1000);
  try{
   server=await require('../src/persona-transport').startPersonaTransport({getSession:()=>session,token:process.env.JEV_PERSONA_TOKEN,port:profile.port});
-  session=createSession(config,client,{stateDirectory,rendezvous,personaVisiblePlayers:true,personaLocalMove:true,authenticate:(bot,cfg)=>communityAuth(bot,cfg,{password,warpAi:process.env.JEV_COMMUNITY_WARP_AI==='1',diagnostic:event=>console.log(JSON.stringify({communityAuth:event})),allowRegister:process.env.JEV_COMMUNITY_FIRST_REGISTER==='1',successText:process.env.MC_LOGIN_SUCCESS_TEXT})});
+  session=createSession(config,client,{stateDirectory,rendezvous,personaProfile,mutationPolicy,personaVisiblePlayers:true,personaLocalMove:true,authenticate:(bot,cfg)=>communityAuth(bot,cfg,{password,warpAi:process.env.JEV_COMMUNITY_WARP_AI==='1',diagnostic:event=>console.log(JSON.stringify({communityAuth:event})),allowRegister:process.env.JEV_COMMUNITY_FIRST_REGISTER==='1',successText:process.env.MC_LOGIN_SUCCESS_TEXT})});
   client.ledger=require('../src/http-usage-ledger').attachHttpUsageLedger(client.ledger,path.join(directory,'http-usage.jsonl'),{maxEntries:limit,onError:()=>stop('HTTP usage ledger unavailable')});
   const outcome=await session.closed;console.log(JSON.stringify({communityClosed:outcome,httpAttempts:budget.used,httpLimit:limit}));
  }finally{clearTimeout(timer);clearTimeout(killTimer);session?.shutdown();if(server)await new Promise(resolve=>server.close(resolve));}

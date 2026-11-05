@@ -2,6 +2,18 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const {randomUUID}=require('node:crypto');
 const {validContext,withPersonaContext}=require('../src/persona-context');const {createPersona}=require('../src/persona-admission');const {TypeSafe}=require('../src/typesafe');
 const context=(now=Date.now()/1000)=>({identity:'Tolik',motivations:['Create a welcoming settlement'],objective:'Improve the accepted structure',intention:'Inspect available space',purpose:'Choose a feasible next action',visual_assessment:{observed_at:now,summary:'The visible roof might benefit from another window'}});
+test('work and idle contexts expose current hard authority independently of goal leases',async()=>{
+ const seen=[],client={systemOne:async args=>seen.push(args)};
+ let authority={enabled:true,scopes:[]};
+ const scoped=withPersonaContext(client,()=>null,()=>false,{getMutationAuthority:()=>authority});
+ await scoped.systemOne({state:{mutation_authority:{enabled:false}}});
+ assert.deepEqual(seen[0].state.mutation_authority,authority);
+ authority={enabled:true,scopes:[{id:'new-scope'}]};
+ await scoped.systemOne({state:{}});
+ assert.deepEqual(seen[1].state.mutation_authority,authority);
+ await withPersonaContext(client,()=>null,()=>false).systemOne({state:{mutation_authority:{enabled:false}}});
+ assert.equal(seen[2].state.mutation_authority,undefined);
+});
 test('bounded context rejects command text, unknown fields, stale visual claims and oversized content',()=>{
  const c=context();assert.equal(validContext(c),true);
  for(const bad of [{...c,raw_chat:'hello'},{...c,purpose:'/op somebody'},{...c,identity:'a\nline'},{...c,objective:'x'.repeat(801)},{...c,motivations:Array(7).fill('x')},{...c,visual_assessment:{...c.visual_assessment,observed_at:Date.now()/1000-301}}])assert.equal(validContext(bad),false);

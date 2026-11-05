@@ -4,6 +4,7 @@ import json
 import math
 import re
 import argparse
+import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import dotenv_values
@@ -24,13 +25,24 @@ if args.rendezvous_player:
  x,y,z=args.rendezvous_position
  if not re.fullmatch(r'[A-Za-z0-9_]{1,16}',args.rendezvous_player) or not all(map(math.isfinite,(x,y,z))) or abs(x)>29999984 or abs(z)>29999984 or not -64<=y<=319: parser.error('Invalid rendezvous player or coordinates')
 root=Path(__file__).resolve().parents[2]
+try:
+ spec=importlib.util.spec_from_file_location('configured_community_persona',root/'NetTyan/scripts/community-persona.py')
+ configured=importlib.util.module_from_spec(spec)
+ spec.loader.exec_module(configured)
+ persona_profile=json.dumps(configured.configured_profile(args.character),ensure_ascii=False,separators=(',',':'),allow_nan=False)
+ if len(persona_profile.encode('utf-8'))>24576:raise ValueError('Profile too large')
+except Exception:
+ raise SystemExit('Configured community persona unavailable or invalid') from None
 profile=root/'setup/jevcraft-community'
+authority=profile/'characters'/args.character/'mutation-authority.json'
 tolik=args.character=='TolikScheben'
 private=dotenv_values(profile/('tolik-private.env' if tolik else 'private.env'))
 key=private.get('OPENROUTER_API_KEY') or dotenv_values(root/'NetTyan/.env').get('OPENROUTER_API_KEY')
 if not key: raise SystemExit('Configured OpenRouter key unavailable')
 # Deliberately do not inherit local house goals, voice endpoints or profile settings.
 env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','TMPDIR','LANG','LC_ALL'}}
+env['JEV_PERSONA_PROFILE']=persona_profile
+if authority.exists():env['JEV_MUTATION_AUTHORITY']=str(authority)
 for k in ['MC_LOGIN_PASSWORD','JEV_PERSONA_TOKEN']:
  if not private.get(k): raise SystemExit(f'Missing community configuration: {k}')
  env[k]=private[k]

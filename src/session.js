@@ -51,10 +51,19 @@ function unworkable(bot, spec) {
 }
 
 function createSession(config, client, { stateDirectory = path.join(__dirname, '..', '.bot-state'), recorder,
-  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false, personaLocalMove=false } = {}) {
+  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false, personaLocalMove=false, personaProfile=null, mutationPolicy=null } = {}) {
+  // Invalid configured identity fails before creating a connection. The
+  // optional local profile does not delay reflexes on an HTTP handshake.
+  if(personaProfile!==null&&!require('./persona-context').validProfile(personaProfile))throw new Error('Invalid configured persona profile');
   const externalPersona = process.env.JEV_PERSONA_MODE === '1';
+  const identity = `${config.host}-${config.port}-${config.username}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const mutationWorldId=process.env.MC_WORLD_ID||identity;
+  if(mutationPolicy!==null){
+    if(!externalPersona)throw new Error('Shared-world mutation policy requires persona mode');
+    mutationPolicy=require('./mutation-authority').validateMutationAuthority(mutationPolicy,{worldId:mutationWorldId,principal:config.username});
+  }
   let persona = null, vision = null;
-  let ended = false, spawned = false, resolveClosed;
+  let ended = false, spawned = false, gameplayAuthorized=false, resolveClosed;
   const connectedAt = Date.now();
   const closed = new Promise(resolve => { resolveClosed = resolve; });
   const bot = mineflayer.createBot({ ...config, respawn: false });
@@ -157,7 +166,6 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // A new build is taken at a quiet moment (quiet-restart.js).
   if (!process.env.JEV_NO_QUIET_RESTART) bot.once('spawn', () => require('./quiet-restart').watchRestartRequest(bot, path.join(stateDirectory, 'restart-requested'), { startedAt: require('./quiet-restart').PROCESS_STARTED, port: config.port }));
   if (!process.env.JEV_NO_QUIET_RESTART) bot.once('spawn', () => require('./quiet-restart').watchStuck(bot, { port: config.port }));
-  const identity = `${config.host}-${config.port}-${config.username}`.replace(/[^a-zA-Z0-9_-]/g, '_');
   const commandLog = path.join(stateDirectory, `${identity}-commands.jsonl`);
   bot._client.on('declare_commands', tree => {
     if (ended) return;
@@ -205,6 +213,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // began with the old one's portals and game progress.
   const world = new WorldKnowledge(new GoalStore(path.join(stateDirectory, `${memoryIdentity}-world.json`)),
     { seedFrom: memoryIdentity === identity ? [store.read(), idleStore.read()] : [] });
+  const mutationAuthority=mutationPolicy===null?null:require('./mutation-authority').installMutationAuthority(bot,{policy:mutationPolicy,worldId:mutationWorldId,principal:config.username,world,isCurrent:()=>!ended&&gameplayAuthorized});
   // The cost ledger: every Jev call charged to the request or dream it
   // served, kept per world, and summarized to run-ledger.md in the state directory when a run
   // ends. The client feeds it; the session only says which run is paying.
@@ -214,7 +223,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // Whatever is active pays for the calls made on its behalf; with nothing
   // active, an idle bot that has a dream is still that dream's cost.
   const routed = withRun(client, () => active?.goal.ledgerRun ?? dreamStore.read()?.ledgerRun);
-  const contextual = getGoal => externalPersona ? require('./persona-context').withPersonaContext(routed,getGoal,goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId),{getProfile:()=>persona?.actorProfile}) : routed;
+  const contextual = getGoal => externalPersona ? require('./persona-context').withPersonaContext(routed,getGoal,goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId),{getProfile:()=>persona?.actorProfile,getMutationAuthority:()=>mutationAuthority?.summary()}) : routed;
   const dreamName = (key, text) => `dream · ${key === 'custom' ? text : DREAMS[key].title}`;
   // The dream's run in the ledger. A standing from before the ledger
   // existed gets one now, dated from when the dream was given.
@@ -751,6 +760,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       else await bot.waitForChunksToLoad();
       await authentication?.beforeGameplay?.();
       if (ended || !bot.isAlive) return;
+      gameplayAuthorized=true;
       // The ground about the bot read again before anything resumes: in
       // lava, out at once; in water beside lava, onto dry ground clear of it
       // (lava-escape.js settleAfterJoin, note 756). 25597 came back standing
@@ -820,6 +830,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   });
   function close(reason) {
     if (ended) return;
+    mutationAuthority?.close();gameplayAuthorized=false;
     observation?.detach(String(reason || 'connection closed'));
     ready = false; voice?.reset(); clearInterval(idleTimer); invalidateRequests();
     persona?.close().catch(console.error);
@@ -829,7 +840,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     // of 2026-10-23 06:38:10Z ('the death event came again 1.4 s after the one recorded') and full-3's in the End at
     // 06:0xZ were never on disk; the survival file's last death stayed 04:55 and 04:54, and every question's recent deaths
     // and the bed kit's bare-death count with it.
-    for (const s of [store, survivalStore, idleStore]) { try { s.flushSync(); } catch (err) { console.error(`[bug] a store was not flushed at close: ${err.message}`); } }
+    for (const s of [store, survivalStore, idleStore,...(mutationAuthority?[world.store]:[])]) { try { s.flushSync(); } catch (err) { console.error(`[bug] a store was not flushed at close: ${err.message}`); } }
     // Fence late saves from this connection before a replacement reads state.
     ended = true;
     memory.flush();
@@ -861,6 +872,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     persona = require('./persona-admission').createPersona({
       rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,movementAffordances:()=>require('./persona-move').standingAffordances(bot,{enabled:personaLocalMove&&ready&&!ended}),checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
+        mutation_authority:require('./mutation-authority').mutationAuthoritySummary(bot),
         vision_capabilities:vision?.capabilities()||{enabled:false,look:false},
         execution:require('./persona-execution').executionSnapshot(bot,active),
         body_reports:require('./body-reports').tail(survival.state,process.env.MC_WORLD_ID||identity),
@@ -892,6 +904,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
       },
     });
+    if(personaProfile!==null)persona.setProfile(personaProfile,persona.sessionId);
     if(process.env.JEV_VISION_ENABLED==='1')vision=require('./persona-vision').installPersonaVision(bot,{sessionId:()=>persona.sessionId,worldId:process.env.MC_WORLD_ID||identity,ready:()=>ready&&!ended,activeGoalId:()=>active?.goal?.personaGoalId||null,safeToLook:()=>ready&&!ended&&(!active||active.idle)&&bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false&&!['survival','vitals'].includes(bot._turn?.holder)});
     require('./persona-chat').installPersonaChat(bot,{community:config.host==='mc.agicraft.ru'&&Number(config.port)===25565,ready:()=>ready&&!ended,emit:event=>persona.emit(event)});
     let lastSpeech=0;

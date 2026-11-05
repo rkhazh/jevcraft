@@ -756,6 +756,7 @@ async function slotForDrop(bot, task, target, goal, save, actions, site) {
 
 async function fightForDrop(bot, task, target, goal, save, actions, { timeoutMs = 30000, pickupWaitMs = 2500 } = {}) {
   task.check(); checkAir(bot);
+  require('./interaction-guard').assertAttack(bot, target);
   const state = goal.mobHunt, handler = handlers[target.name];
   if (!handler || handler.item !== state?.item || !valid(bot, target) || !canBegin(bot, handler) || !isolated(bot, target, handler)) throw new Error('Mob encounter is no longer feasible');
   await roomForDrop(bot, task, goal, state.item);
@@ -1098,7 +1099,7 @@ async function huntObserved(bot, task, goal, save, actions, client) {
     try { held = require('./cage-hold').holding(bot, goal); } catch (_) { held = null; }
     if (held && await require('./empty-spawner').holdPlan(bot, task, goal, save, actions, held)) return true;
   }
-  const candidates = Object.values(bot.entities).filter(e => e.name === state.entity && valid(bot, e) &&
+  const candidates = Object.values(bot.entities).filter(e => e.name === state.entity && valid(bot, e) && require('./interaction-guard').attackAllowed(bot, e) &&
     e.position.distanceTo(bot.entity.position) < 24 && isolated(bot, e, handler) &&
     !isSetAside(goal, 'hunt_target', e.uuid || e.id)).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position));
   // A blaze hunt about to go at blazes none of which sees the bot yet is a
@@ -1904,7 +1905,7 @@ async function prepareMobHunt(bot, task, step, goal, save, actions) {
     const until = state.deferredUntil > Date.now() ? state.deferredUntil : Date.now() + 60000;
     throw new WaysResting(`The ${step.entity.replaceAll('_', ' ')} hunt is left for now: Jev chose to leave them at the hunt's question, for two minutes (until ${new Date(until).toISOString().slice(11, 19)}Z)`, until);
   }
-  const near = Object.values(bot.entities || {}).filter(e => e.name === step.entity && e.isValid !== false &&
+  const near = Object.values(bot.entities || {}).filter(e => e.name === step.entity && e.isValid !== false && require('./interaction-guard').attackAllowed(bot, e) &&
     !isSetAside(goal, 'hunt_target', e.uuid || e.id) && e.position.distanceTo(bot.entity.position) < 32)
     .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0];
   if (near) {

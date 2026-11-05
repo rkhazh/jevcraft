@@ -69,7 +69,7 @@ function animalCandidates(bot, goal = {}) {
   for (const [animal, rule] of Object.entries(ANIMALS)) {
     const carried = rule.carried(bot);
     if (carried >= rule.wanted) continue;
-    const target = Object.values(bot.entities).filter(e => e.name === animal && e.isValid !== false && e.position && !baby(bot, e) &&
+    const target = Object.values(bot.entities).filter(e => e.name === animal && e.isValid !== false && e.position && !baby(bot, e) && require('./interaction-guard').attackAllowed(bot, e) &&
       e.position.distanceTo(here) <= LIMITS.animalRadius && !skippedRecently(goal, `mob:${e.uuid || e.id}`) &&
       isolated(bot, e, { passive: true }) && safeFromHostiles(bot, e.position))
       .sort((a, b) => a.position.distanceTo(here) - b.position.distanceTo(here))[0];

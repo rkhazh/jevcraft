@@ -119,7 +119,7 @@ function lootableChests(bot, goal, { reach = NEAR } = {}) {
   const watched = !overworld(bot) && piglinInSight(bot);
   const here = bot.entity.position, looted = goal.looted || {};
   return bot.findBlocks({ matching: id, maxDistance: reach, count: 16 })
-    .filter(p => { const s = !looted[key(p)] && !isSetAside(goal, 'loot_chest', key(p)) && !ownChest(goal, p) && structureOf(goal, p, bot);
+    .filter(p => { const s = !looted[key(p)] && !isSetAside(goal, 'loot_chest', key(p)) && !ownChest(goal, p) && require('./interaction-guard').containerAllowed(bot, bot.blockAt(p)) && structureOf(goal, p, bot);
       return s && (overworld(bot) || (['nether_fortress', 'chest'].includes(s.kind) && !watched) || (s.kind === 'bastion' && require('./bastion-raid').raidOn(goal))) && !trapped(bot, p); })
     .sort((a, b) => a.distanceTo(here) - b.distanceTo(here));
 }
@@ -135,7 +135,7 @@ function lootableMinecarts(bot, goal, { reach = NEAR } = {}) {
   const shafts = (goal.landmarks || []).filter(l => l.kind === 'mineshaft' && sameDimension(bot, l));
   if (!shafts.length) return [];
   const here = bot.entity.position, looted = goal.looted || {};
-  return Object.values(bot.entities || {}).filter(e => e.name === 'chest_minecart' && e.isValid !== false && e.position &&
+  return Object.values(bot.entities || {}).filter(e => e.name === 'chest_minecart' && e.isValid !== false && e.position && require('./interaction-guard').containerAllowed(bot, e, { entity: true }) &&
     e.position.distanceTo(here) <= reach && !looted[cartKey(e)] && !isSetAside(goal, 'loot_chest', cartKey(e)) &&
     shafts.some(l => Math.hypot(l.x - e.position.x, l.z - e.position.z) <= MINESHAFT_REACH) && !spawnerNear(bot, e.position.floored()))
     .sort((a, b) => a.position.distanceTo(here) - b.position.distanceTo(here));

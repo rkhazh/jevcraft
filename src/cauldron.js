@@ -108,7 +108,8 @@ function placeSpot(bot) {
 // cauldron and a water bucket carried and a spot to put it down.
 function plans(bot) {
   const carriedCauldron = have(bot, 'cauldron'), bucket = have(bot, 'water_bucket');
-  return { placed: placedCauldron(bot), carry: carriedCauldron && bucket ? placeSpot(bot) : null, cauldrons: carriedCauldron, buckets: bucket };
+  const filling=require('./mutation-authority').blockInteractionSupport(bot,'cauldron','water_bucket');
+  return { placed: placedCauldron(bot), carry: carriedCauldron && bucket && filling.allowed ? placeSpot(bot) : null, cauldrons: carriedCauldron, buckets: bucket,...(!filling.allowed?{unavailable:{effect:'cauldron_fill',reason:filling.reason}}:{}) };
 }
 
 // Which axis the bot enters along: forward is (-sin yaw, -cos yaw).
@@ -127,6 +128,8 @@ const letGo = bot => { bot.clearControlStates?.(); bot.setControlState?.('sneak'
 
 // Put a carried cauldron down at `spot` and fill it from the water bucket.
 async function setDown(bot, task, spot, onAction = () => {}) {
+  const support=require('./mutation-authority').blockInteractionSupport(bot,'cauldron','water_bucket');
+  if(!support.allowed)throw Object.assign(new Error(`Cauldron filling is unavailable: ${support.reason}`),{name:'StructureMutationRefused',mutationReason:support.reason});
   const cauldron = bot.inventory.items().find(i => i.name === 'cauldron'), bucket = bot.inventory.items().find(i => i.name === 'water_bucket');
   if (!cauldron || !bucket) return false;
   onAction({ action: 'out_of_fire', way: 'set_down_cauldron', health: bot.health });

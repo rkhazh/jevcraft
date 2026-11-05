@@ -9,6 +9,7 @@ const { surveyRoute } = require('./skills');
 const { homeFood, eatFromHome } = require('./home-base');
 const { villageFood, eatFromVillage } = require('./villages');
 const { makeRoom } = require('./inventory-tidy');
+const {filterMutationCells,hasMutationAuthority}=require('./mutation-authority');
 const { strike, shooter } = require('./combat');
 const vanilla = require('../data/vanilla-26.1.json');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -20,7 +21,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Pigs and chickens too since 2026-10-19 (the user lifted the rule that spared them).
 const landPrey = new Set(['cow', 'mooshroom', 'sheep', 'rabbit', 'pig', 'chicken']);
 function preyFood(bot, entity) {
-  if (!landPrey.has(entity.name)) return undefined;
+  if (!landPrey.has(entity.name) || !require('./interaction-guard').attackAllowed(bot, entity)) return undefined;
   const keys = bot.registry.entitiesByName[entity.name]?.metadataKeys || [];
   if (entity.metadata?.[keys.indexOf('baby')] === true ||
     (entity.name === 'rabbit' && entity.metadata?.[keys.indexOf('type')] === 99)) return undefined;
@@ -150,6 +151,7 @@ async function hunt(bot, task, target, actions, goal, save) {
 // offered one steak (note 702).
 async function forageChoices(bot, task, goal, save, actions, state, { target = 12 } = {}) {
   const choices = {};
+  const unavailable=[];const onBlocked=f=>{if(unavailable.length<4&&!unavailable.some(x=>x.source===f.source))unavailable.push(f);};
   for (const [output, inputs] of Object.entries(knowledge(bot.registry).smelting)) {
     if (!safeFood(bot, { name: output })) continue;
     const input = inputs.find(name => count(bot, name) > 0);
@@ -191,7 +193,7 @@ async function forageChoices(bot, task, goal, save, actions, state, { target = 1
   // Melons and pumpkin pie (note 2474, the user: 'Jev doesn't seem interested in pumpkin. Can he eat it?'): only cooking,
   // bread, the hunts, fishing and farms were offered. A melon block broken drops three to seven slices, two points each,
   // no furnace; a pumpkin, a sugar (one sugar cane) and an egg make a pie of eight points at a crafting table.
-  const near = name => { const id = bot.registry?.blocksByName?.[name]?.id; if (id === undefined || typeof bot.findBlocks !== 'function') return []; try { return bot.findBlocks({ matching: id, maxDistance: 32, count: 8 }) || []; } catch (_) { return []; } };
+  const near = name => { const id = bot.registry?.blocksByName?.[name]?.id; if (id === undefined || typeof bot.findBlocks !== 'function') return []; try { return filterMutationCells(bot,'dig',bot.findBlocks({ matching: id, maxDistance: 32, count: 8 }) || [],{source:name,onBlocked}); } catch (_) { return []; } };
   const here = bot.entity?.position;
   const melons = /overworld/.test(String(bot.game?.dimension || 'overworld')) ? near('melon') : [];
   if (melons.length && bot.registry.itemsByName.melon_slice) {
@@ -212,6 +214,7 @@ async function forageChoices(bot, task, goal, save, actions, state, { target = 1
   // only in the Nether (nether-food.js).
   if (/overworld/.test(String(bot.game?.dimension || 'overworld')) && bot.registry.itemsByName.mushroom_stew) {
     let seen = { red: 0, brown: 0, nearest: null }; try { seen = require('./nether-food').mushroomsIn(bot); } catch (_) { /* none read */ }
+    if(hasMutationAuthority(bot)){const red=near('red_mushroom'),brown=near('brown_mushroom');seen={red:red.length,brown:brown.length,nearest:[...red,...brown].length?Math.round(Math.min(...[...red,...brown].map(p=>p.distanceTo(bot.entity.position)))):null};}
     const red = count(bot, 'red_mushroom') + seen.red, brown = count(bot, 'brown_mushroom') + seen.brown;
     const planks = bot.inventory.items().filter(i => /_planks$/.test(i.name)).reduce((n, i) => n + i.count, 0) + 4 * bot.inventory.items().filter(i => /_(log|stem)$/.test(i.name)).reduce((n, i) => n + i.count, 0);
     const stews = Math.min(red, brown, 4, Math.max(1, Math.ceil((target - foodSupply(bot)) / 6)));
@@ -374,7 +377,7 @@ async function forageChoices(bot, task, goal, save, actions, state, { target = 1
   // already stacked: ripe crops are taken and replanted, a bale or two is
   // dug for bread. Read off the world when the village is loaded, off
   // memory when it is not, and weighed by Jev beside any hunt in view.
-  const village = villageFood(bot, goal);
+  const village = villageFood(bot, goal, {onBlocked});
   if (village) choices.village_food = {
     description: { action: 'Walk to the remembered village and take what is ripe from its farms (wheat, carrots, potatoes, putting the seed back) and a hay bale or two, then bake bread from the wheat. The villagers keep their houses and their bell.',
       distance: village.distance, ripeCrops: village.ripeCrops, hayBales: village.hayBales, villageLoaded: village.loaded, ...walkFacts(village.distance) },
@@ -475,6 +478,9 @@ async function forageChoices(bot, task, goal, save, actions, state, { target = 1
   // Or the rod made first, where neither it nor its string is carried and
   // no animal is in view or known (note 1378): the ground hunted out.
   if (!choices.fish_with_rod && !Object.keys(choices).some(k => /^(hunt_|seen_food_)/.test(k))) { try { const first = fishing.rodFirstChoice(bot, task, goal, save, actions, walkFacts); if (first) choices.rod_first = first; } catch (_) { /* nothing to say */ } }
+  // These are observed exclusions, not runnable actions. Include once in the
+  // ordinary decision descriptions so a missing grant is not hidden as hunger.
+  if(unavailable.length){const first=Object.values(choices).find(c=>c.description&&typeof c.description==='object');if(first)first.description.unavailable_block_sources=unavailable;}
   return choices;
 }
 

@@ -10280,12 +10280,37 @@ class Survival {
 
   // One Jev decision over a tree the code built: the question is defined in
   // decisions/survival.js and asked the one way every question is.
+  admittedNeed(goal) {
+    return require('./arbiter').rulesPick([claim(this.bot, goal, this), require('./vitals').claim(this.bot)]
+      .filter(c => c && require('./persona-idle').claimEligible(goal, c)));
+  }
+
+  eligibleNow(goal, admitted = null) {
+    if (goal?.personaHold !== true) return true;
+    const current = this.admittedNeed(goal);
+    // The same kind of response must still be needed. A newly arriving
+    // threat cannot authorize an old food trip, or the other way around.
+    return !!current && (!admitted || ['layer', 'action', 'purpose', 'reflex', 'alert']
+      .every(k => current[k] === admitted[k]));
+  }
+
   decide(task, goal, save, { id, state, tree, context, isFresh = () => true, interrupt = () => {}, situation = undefined, aside = false }) {
     // A question not asked for a creeper within its alert (decisions/index.js
     // creeperFirst) is kept for the step: the creeper's own answer follows it
     // in the same pass (step, note 1063).
-    return decide(id, { client: this.client, bot: this.bot, task, goal, save, tree, state, context, isFresh, interrupt, situation, aside })
-      .then(d => { if (d?.creeperFirst) this._creeperRefused = { id, facts: d.creeperFirst, at: Date.now() }; return d; });
+    const admitted = goal?.personaHold ? this.admittedNeed(goal) : null;
+    const eligible = () => this.eligibleNow(goal, admitted);
+    if (!eligible()) return Promise.resolve({ stale: true });
+    return decide(id, { client: this.client, bot: this.bot, task, goal, save, tree, state, context, isFresh: () => isFresh() && eligible(), interrupt, situation, aside })
+      .then(d => {
+        if (!eligible()) return { ...d, stale: true };
+        if (d?.creeperFirst) this._creeperRefused = { id, facts: d.creeperFirst, at: Date.now() };
+        if (goal?.personaHold && typeof d?.action?.run === 'function') {
+          const action = d.action;
+          return { ...d, action: { ...action, run: (...args) => eligible() ? action.run(...args) : false } };
+        }
+        return d;
+      });
   }
 
   // The carried bed goes down where the night caught us and comes back up
@@ -11492,6 +11517,10 @@ class Survival {
 
   async stepOnce(task, goal, save, onStep) {
     const bot = this.bot;
+    const eligible = require('./persona-idle').claimEligible;
+    const preparation = eligible(goal, { purpose: 'preparation' });
+    const needed = () => this.eligibleNow(goal);
+    if (!needed()) return false;
     // A death Jev chose to start over (respawn-fresh.js, note 2173): the survival layer stands down for it.
     if (require('./respawn-fresh').standing(goal)) return false;
     // The Nether stays kept as they happen (note 2245): said on the questions that spend Nether time.
@@ -11557,7 +11586,7 @@ class Survival {
       onStep(goal); return true;
     }
     // A bed the last bedtime left behind, when it is near and nothing is.
-    if (this.state.bedLeft && await this.fetchLeftBed(task, goal, save)) { onStep(goal); return true; }
+    if (preparation && this.state.bedLeft && await this.fetchLeftBed(task, goal, save)) { onStep(goal); return true; }
     // The last dry footing, for the way back out of lava.
     if (bot.entity.onGround && !bot.entity.isInWater) {
       const f = feetCell(bot);
@@ -11635,8 +11664,13 @@ class Survival {
         }
       }
     }
-    await maintainVitals(bot, task, action => this.report(goal, save, action), { client: this.client, goal, save,
+    const cared = await maintainVitals(bot, task, action => this.report(goal, save, action), { client: this.client, goal, save,
       cookFirst: item => require('./work').acquireStep(bot, task, item.cooked, countOf(bot, item.cooked) + item.n, goal, save) });
+    // Eating or an extinguished fire may have ended the admitted need. A
+    // response never grants the rest of this pass permission to stock up.
+    if (!needed()) return !!cared;
+    const foodNeed = !preparation && this.admittedNeed(goal)?.facts?.need;
+    const foodResponse = foodNeed === 'hunger' || foodNeed === 'heal';
     // Still in a block: nothing else this turn, the dig out comes again at
     // once. mid-79-c went on to craft its spare pickaxe under the gravel.
     if (require('./vitals').headInBlock(bot)) { onStep(goal); return true; }
@@ -11782,13 +11816,13 @@ class Survival {
       const byBed = homeBed ? monstersByBed(bot, homeBed.foot, 32) : 0;
       const bedWalk = homeBed ? ` ${Math.round(homeBed.foot.distanceTo(bot.entity.position))} blocks away (about ${Math.round(homeBed.foot.distanceTo(bot.entity.position) / 4.3)} seconds at a walk${Math.abs(homeBed.foot.y - bot.entity.position.y) > 2 ? `, ${Math.round(homeBed.foot.y - bot.entity.position.y)} blocks up or down` : ''})` : ' in the pack';
       const climbSays = homeBed && homeBed.foot.y - bot.entity.position.y > 10 ? ` The bed is ${Math.round(homeBed.foot.y - bot.entity.position.y)} blocks up: the way there climbs out first by stairs dug up through the rock (roughly ${require('./surface').climbMinutes(Math.round(homeBed.foot.y - bot.entity.position.y))} minutes), then walks over the ground in the dark.` : '';
-      if (bedNear) options.go_to_bed = { description: `Open the pocket and go to the bed${bedWalk}; the night passes in seconds.${climbSays}${byBed ? ` ${byBed} monster${byBed === 1 ? '' : 's'} within eight blocks of the bed now: sleep is refused while any are.` : ''}${who ? ` Outside is ${who}.` : ''}${bedSafetyAt(bot, homeBed ? homeBed.foot : bot.entity.position).says}`,
+      if (preparation && bedNear) options.go_to_bed = { description: `Open the pocket and go to the bed${bedWalk}; the night passes in seconds.${climbSays}${byBed ? ` ${byBed} monster${byBed === 1 ? '' : 's'} within eight blocks of the bed now: sleep is refused while any are.` : ''}${who ? ` Outside is ${who}.` : ''}${bedSafetyAt(bot, homeBed ? homeBed.foot : bot.entity.position).says}`,
         run: async () => { delete this.state.watchedSince; await this.leave(task, goal, save, refuge, 'Off to bed.'); return true; } };
       // The carried bed in a nook dug out of the pocket's wall, the pocket
       // staying shut: the one bot of the six midgame trials of 2026-09-26
       // that carried a bed sat its nights out in pockets like this one.
       // Before bedtime the nook is said with the stay.
-      const carried = night && bedCarried(bot) && bot.game?.dimension === 'overworld' && !sleepWaiting(this) && !isSetAside(this, 'bed_nook', 'here') && typeof this.actions.dig === 'function';
+      const carried = preparation && night && bedCarried(bot) && bot.game?.dimension === 'overworld' && !sleepWaiting(this) && !isSetAside(this, 'bed_nook', 'here') && typeof this.actions.dig === 'function';
       const nook = carried && bedNook(bot, goal, { sealed: true });
       if (nook && sleepable(bot)) options.sleep_in_nook = { description: `Stay sealed in and ${nookSays(bot, nook, { pocket: true })}${outside}`,
         run: async () => {
@@ -11840,12 +11874,12 @@ class Survival {
       const waiting = workWaiting(goal, bot);
       const below = underRock(bot, refuge);
       const nightCost = night ? ` Until dawn is about ${minutesToDawn(bot)} real minutes of the run${waiting ? `, with ${waiting} waiting` : ''}.` : '';
-      if (night && !watcher && !refused(this, 'survival:night_mine') && this.canNightMine(goal))
+      if (preparation && night && !watcher && !refused(this, 'survival:night_mine') && this.canNightMine(goal))
         options.night_mine = { description: `Mine from the pocket through the night: toward ore in the rock, or down and along a branch. Rock around a tunnel is shelter too. ${rockHolds(bot, feetCell(bot), attemptsFor(this))}${nightCost}${nightMinePickSays(bot)}${outside}${(() => { const st = this.state.nightMineStopped; if (!st || Date.now() - st.at > 10 * 60000) return ''; return ` The night mine was stopped ${Math.max(1, Math.round((Date.now() - st.at) / 1000))} seconds ago, chosen to seal in and wait for dawn (note 1384).`; })()}`, run: () => this.nightMine(task, goal, save) };
       // Work that needs no walking: the ladder's next item made from what is
       // carried. Trial 30 sat out its second night in a pocket with 29 raw
       // iron, coal and a furnace in its pack, the armour the one thing left.
-      const bench = !watcher && goal.kind === 'win' && this.benchWork(goal);
+      const bench = preparation && !watcher && goal.kind === 'win' && this.benchWork(goal);
       if (bench) options.work_here = { description: `Stay in the pocket and make the ${bench.item.replaceAll('_', ' ')} here: everything it needs is carried (${bench.plan.map(st => `${st.action} ${st.count || 1} ${String(st.item || '').replaceAll('_', ' ')}`).join(', then ')}). The furnace and the table go into the wall; the pocket stays shut.${(() => {
         // How long it takes against the night left (the decision audit,
         // 2026-09-25): ten seconds a smelt.
@@ -11855,11 +11889,11 @@ class Survival {
         run: async () => { this.report(goal, save, { action: 'work_in_pocket', item: bench.item }); await this.actions.acquireStep(bot, task, bench.item, bench.count, goal, save); return true; } };
       // Out to hunt, or the valuables to the chest first (a death drops
       // everything carried): at night with nothing watching.
-      if (night && !watcher) for (const [key, o] of Object.entries(this.huntOptions(goal))) options[key] = { description: o.description + outside,
+      if (preparation && night && !watcher) for (const [key, o] of Object.entries(this.huntOptions(goal))) options[key] = { description: o.description + outside,
         run: async () => { this.state.nightPlan = { plan: 'hunt', kind: o.kind, until: Date.now() + 120000, startHealth: bot.health }; await this.leave(task, goal, save, refuge, `Out to hunt ${o.kind.replaceAll('_', ' ')}s.`, { past: true }); return true; } };
-      const stash = night && !watcher && this.stashOption(goal);
+      const stash = preparation && night && !watcher && this.stashOption(goal);
       if (stash) options.stash_valuables = { description: stash.description + outside, run: async () => { await this.leave(task, goal, save, refuge, 'To the chest.', { past: true }); return stash.run(task, goal, save); } };
-      const cache = night && !watcher && !stash && this.cacheOption(goal);
+      const cache = preparation && night && !watcher && !stash && this.cacheOption(goal);
       if (cache) options.cache_valuables = { description: `Open the pocket and ${cache.description.charAt(0).toLowerCase()}${cache.description.slice(1)}${outside}`, run: async () => { await this.leave(task, goal, save, refuge, 'Leaving my valuables in a chest.', { past: true }); return cache.run(task, goal, save); } };
       const bedLater = nook && !sleepable(bot) ? ` The carried bed can go down in a nook dug out of the wall, the pocket staying shut, from bedtime (${SLEEP_FROM}), about ${Math.max(0, Math.round((SLEEP_FROM - bot.time.timeOfDay) / 20))} seconds off.` : '';
       // Health and whether it comes back, at night too, and on the way out:
@@ -12224,7 +12258,7 @@ class Survival {
       // 1313): about 85 in 100 of the meat eaten in the three hours to 21:10Z
       // (2026-10-05) went down raw, and a sealed pocket is about eight idle
       // minutes a night. The furnace is put down in the pocket.
-      if (typeof this.actions.acquireStep === 'function') {
+      if ((preparation || foodResponse) && typeof this.actions.acquireStep === 'function') {
         let cook = null; try { cook = require('./work').cookable(bot); } catch (_) { cook = null; }
         if (cook?.ready && cook.after - cook.now >= 6) {
           const first = cook.items.slice().sort((x, y) => (y.after - y.now) - (x.after - x.now))[0];
@@ -12537,11 +12571,11 @@ class Survival {
     // claim while a ghast's fireball threw it off a ledge; the turn went to
     // the work six times at 12 then 8 health, and the next fireball ended
     // it (note 541).
-    else if (hunt && !immediateThreat(bot) && await this.huntStep(task, goal, save)) { onStep(goal); return true; }
+    else if (hunt && (preparation || hunt.food && foodResponse) && !immediateThreat(bot) && await this.huntStep(task, goal, save)) { onStep(goal); return true; }
     // Nor one that will not dig, has mined nothing for two minutes, or a food
     // errand chosen since has replaced (nightMineHolds, note 755c).
     if (!shelterNeeded(bot) || (this.state.nightMine && !nightMineHolds(bot, this.state, this))) delete this.state.nightMine;
-    else if (this.state.nightMine && !immediateThreat(bot) &&
+    else if (preparation && this.state.nightMine && !immediateThreat(bot) &&
         await this.nightMine(task, goal, save)) { onStep(goal); return true; }
     // Or one that has stood off, whose claim Jev gave the turn to (note
     // 752): answered as any, by the stance.
@@ -12578,6 +12612,7 @@ class Survival {
       onStep(goal); return true;
     }
     delete this.state.trappedSince;
+    if (!needed()) return false;
     // A bed in the pockets moves the whole question to bedtime: no site to
     // reserve at 9500, no blocks to gather, and at 12541 the choice is
     // sleep, or stay up armed because the dark is what the request needs.
@@ -12593,7 +12628,7 @@ class Survival {
     // Home before bedtime: wait by the bed rather than hand the minute back
     // to the work loop, which dived to the lava site and was climbed out of
     // again every ten seconds until 12541.
-    if (homeBed && shelterNeeded(bot) && bot.time.timeOfDay >= DAY.WALK_HOME && bot.time.timeOfDay < SLEEP_FROM && homeBed.foot.distanceTo(bot.entity.position) <= 6 && !immediateThreat(bot)) {
+    if (preparation && homeBed && shelterNeeded(bot) && bot.time.timeOfDay >= DAY.WALK_HOME && bot.time.timeOfDay < SLEEP_FROM && homeBed.foot.distanceTo(bot.entity.position) <= 6 && !immediateThreat(bot)) {
       // The minute before bedtime is a chore, not a wait: the stash, the
       // wheat, the cows; and once, the plot grows a column for the next day.
       // A chore that failed waits two minutes. Its error was swallowed and
@@ -12654,7 +12689,7 @@ class Survival {
     // held shelter plan with no reason to seal there is let go.
     const nightFree = nightFreeBelow(bot, goal, this.state, { underground, debt: this.sleepDebt() });
     if (nightFree && this.state.nightPlan?.plan === 'shelter') { console.log('[survival] the night\'s shelter plan let go: under the rock with no reason to seal'); delete this.state.nightPlan; }
-    const nightNow = shelterNeeded(bot) && !nightFree;
+    const nightNow = preparation && shelterNeeded(bot) && !nightFree;
     const homeWalk = homeBed && nightNow && homeBed.foot.distanceTo(bot.entity.position) > 6 && (underground || !routeBlocked) &&
       !sleepWaiting(this) && !isSetAside(this, 'surface_home', 'here');
     const heldPlan = this.state.nightPlan?.until > Date.now() ? this.state.nightPlan : null;
@@ -12697,7 +12732,7 @@ class Survival {
     // and back at its bed in the Overworld at night, kept its recovery 'pending' seven minutes and more, never asked
     // about its iron kit in the Nether, and made stone tools.
     const elsewhere = this.state.recovery?.status === 'pending' && this.state.recovery.dimension && this.state.recovery.dimension !== bot.game?.dimension;
-    if ((!needsShelter || elsewhere) && this.state.recovery?.status === 'pending') {
+    if (preparation && (!needsShelter || elsewhere) && this.state.recovery?.status === 'pending') {
       this.report(goal, save, { action: 'recover_items', origin: this.state.recovery.position });
       if (await recoverItems(bot, task, this.state.recovery, save, this.actions.navigate)) { onStep(goal); return true; }
     }
@@ -12744,7 +12779,7 @@ class Survival {
     // carried, often under rock. 163 of the 259 spells with none that began
     // with the last food eaten had no food answer while the food ran down
     // from under twelve; 50 of 177 low-health moments had nothing that heals.
-    const stockDriven = !offWorld && (goal.stockFood || expeditionFood || (goal.kind === 'survive' && bot.game.difficulty !== 'peaceful') || reserve.short(bot, goal, foodSupply(bot)));
+    const stockDriven = preparation && !offWorld && (goal.stockFood || expeditionFood || (goal.kind === 'survive' && bot.game.difficulty !== 'peaceful') || reserve.short(bot, goal, foodSupply(bot)));
     const now = Date.now();
     // Stocked is stocked: the flag that asked for a reserve was never taken
     // down, so the stock-driven search ran for the rest of the goal.
@@ -13691,8 +13726,23 @@ function bedFacts(bot) {
     return { bed: { carried, ...(placed ? { placed } : {}) } };
   } catch (_) { return {}; }
 }
-function claim(bot, goal = {}, survival = null) {
+function claim(bot, goal = {}, survival = null, responsesOnly = false) {
   if (!bot?.entity?.position || bot.game?.gameMode === 'creative') return null;
+  // A held optional plan must not hide a present bodily need behind it.
+  // If there is no response, return the ordinary claim as advisory facts;
+  // eligibility is applied by the executor, not by the observer.
+  if (goal.personaHold && !responsesOnly) {
+    const response = claim(bot, goal, survival, true);
+    // A suspended hunter no longer owns the mob's danger response. Release
+    // its execution exemption before either observation/arbitration or a
+    // direct step classifies threats; retain the plan as history.
+    const hunt = (survival?.state || goal.survival)?.nightPlan;
+    const foodNeed = response?.facts?.need;
+    const ownsHunt = hunt?.food && hunt.until > Date.now() && hunt.kind === bot._nightHunt?.name &&
+      (foodNeed === 'hunger' || foodNeed === 'heal');
+    if (bot._nightHunt && !ownsHunt) { delete bot._nightHunt; return claim(bot, goal, survival); }
+    if (response) return response;
+  }
   const state = survival?.state || goal.survival || {};
   const hp = bot.health ?? 20, now = Date.now();
   const round = n => Math.round(n * 10) / 10;
@@ -13724,7 +13774,7 @@ function claim(bot, goal = {}, survival = null) {
   // a shooter's alone (note 515).
   const facts = { health: hp, food: bot.food, ...(hp < 20 ? { healing: (bot.food ?? 0) >= 18 } : {}), ...(bot.time?.timeOfDay !== undefined && /overworld/.test(String(bot.game?.dimension || 'overworld')) ? { timeOfDay: bot.time.timeOfDay } : {}), ...(hurt ? { hurtLately: true } : {}),
     ...(Object.keys(resting).length ? { setAside: resting } : {}) };
-  const make = (action, urgency, more = {}) => ({ layer: 'survival', action, urgency: hurt && urgency === 'routine' ? 'pressing' : urgency, facts: { ...facts, ...more } });
+  const make = (action, urgency, more = {}, purpose = 'preparation') => ({ layer: 'survival', action, purpose, urgency: hurt && urgency === 'routine' ? 'pressing' : urgency, facts: { ...facts, ...more } });
   const mob = t => ({ name: t.entity.name, distance: round(t.distance), seen: !!t.visible });
   // The drop beside the bot a push can put it over to its death, said on
   // the claim wherever something about can push it (danger.js
@@ -13740,10 +13790,10 @@ function claim(bot, goal = {}, survival = null) {
   // holder's longer reach (danger.js atItsReach, note 586). In sight, or
   // within two.
   const atArm = require('./danger').atReach(bot, threats(bot, 8));
-  if (atArm.length) return make('escape_threat', 'pressing', { atArm: atArm.slice(0, 3).map(t => ({ ...mob(t), ...(t.entity.heldItem?.name ? { held: t.entity.heldItem.name } : {}), canReach: 'at its reach of the bot now' })), ...edgeFact, ...pocket });
+  if (atArm.length) return make('escape_threat', 'pressing', { atArm: atArm.slice(0, 3).map(t => ({ ...mob(t), ...(t.entity.heldItem?.name ? { held: t.entity.heldItem.name } : {}), canReach: 'at its reach of the bot now' })), ...edgeFact, ...pocket }, 'response');
   const shaftReturn = require('./shaft-retreat').current(bot, state);
   if (['returning', 'descending'].includes(shaftReturn?.phase) && !require('./shaft-retreat').urgent(bot))
-    return make(shaftReturn.failure ? 'wait_for_shaft_return' : 'return_from_shaft', 'pressing', { pending: true, returnTo: shaftReturn.entry, remainingHeight: Math.max(0, shaftReturn.entry.y - bot.entity.position.y), ...(shaftReturn.failure ? { blocked: shaftReturn.failure, retryAfter: shaftReturn.retryAfter } : {}) });
+    return make(shaftReturn.failure ? 'wait_for_shaft_return' : 'return_from_shaft', 'pressing', { pending: true, returnTo: shaftReturn.entry, remainingHeight: Math.max(0, shaftReturn.entry.y - bot.entity.position.y), ...(shaftReturn.failure ? { blocked: shaftReturn.failure, retryAfter: shaftReturn.retryAfter } : {}) }, 'obligation');
   // The work's turns stopped at once by its own threat check, again and again, with nothing claimed for the mob that
   // stops them (note 2313): the mob is survival's, and Jev is asked how to answer it. full-11 (25588, 2026-10-27
   // 19:15Z), climbing out at y -3, was given the work alone six times in a second, each stopped at 'Threat nearby:
@@ -13752,7 +13802,7 @@ function claim(bot, goal = {}, survival = null) {
   const stoppedWork = bot._arbiter?.stopped;
   if (stoppedWork && stoppedWork.layer === 'work' && stoppedWork.count >= 2 && now - stoppedWork.at < STOPPED_WORK_MS && /^Threat nearby/.test(stoppedWork.why || '')) {
     let t = null; try { t = require('./danger').immediateThreat(bot); } catch (_) { t = null; }
-    if (t && !t.projectile && t.entity) return make('escape_threat', 'pressing', { workStopped: `the work's last ${stoppedWork.count} turns, in ${Math.max(1, Math.round((now - stoppedWork.first) / 1000))} seconds, were each stopped at once by its threat check: ${stoppedWork.why}`, threats: [mob(t)] });
+    if (t && !t.projectile && t.entity) return make('escape_threat', 'pressing', { workStopped: `the work's last ${stoppedWork.count} turns, in ${Math.max(1, Math.round((now - stoppedWork.first) / 1000))} seconds, were each stopped at once by its threat check: ${stoppedWork.why}`, threats: [mob(t)] }, 'response');
   }
   const refuge = survival?.currentShelter?.();
   // Not in water with open sky over it (openSkyOver, note 753c).
@@ -13760,6 +13810,8 @@ function claim(bot, goal = {}, survival = null) {
   // With how long it has been in the pocket and what it was sealed against
   // (pocket-wait.js, note 584).
   const insideRefuge = refuge && shelter.inside(bot, refuge);
+  const shelteredReturn = shaftReturn?.phase === 'sheltered' && refuge?.shaft && insideRefuge &&
+    ['x', 'y', 'z'].every(k => refuge.origin[k] === shaftReturn.bottom[k] && refuge.top?.[k] === shaftReturn.entry[k]);
   // Sealed, shut but for a fluid, or sealed once before (refuge.verifiedAt)
   // and standing in it now with a wall opened since by its own mining or
   // working free: still the pocket's question, not a fresh "shelter for the
@@ -13783,15 +13835,16 @@ function claim(bot, goal = {}, survival = null) {
   // nothing about it (stepOnce's pocket branch, note 757): said, with when
   // the first comes back, not "asked next".
   const pocketRests = insideRefuge ? pocketRestsOf(state, refuge, now) : null;
-  if (inPocket) return make('pocket_next', 'routine', { inPocket: true, night: shelterNeeded(bot),
+  if ((!responsesOnly || shelteredReturn) && inPocket) return make('pocket_next', 'routine', { inPocket: true, night: shelterNeeded(bot),
+    ...(shelteredReturn ? { pending: true, returnTo: shaftReturn.entry } : {}),
     ...(pocketRests ? { pocketWaysRest: pocketRests } : pocketHeld ? { pocketHeld } : {}), ...(underground ? { underground: true } : {}), ...pocketNotWhole(inPocket),
     ...(require('./pocket-wait').pocketWaitSays(bot, state, goal, { near: threats(bot, 64), night: shelterNeeded(bot),
       // Whether the wait waits for nothing, as the pocket's own question
       // reads it (note 679): nothing to eat, and no spawner in reach.
-      noFood: foodSupply(bot) === 0 && !(lastResortSupply(bot).points > 0), spawner: (() => { try { return survival?.placeAbout?.(goal)?.spawner || null; } catch (_) { return null; } })() })?.claim || {}) });
+      noFood: foodSupply(bot) === 0 && !(lastResortSupply(bot).points > 0), spawner: (() => { try { return survival?.placeAbout?.(goal)?.spawner || null; } catch (_) { return null; } })() })?.claim || {}) }, shelteredReturn ? 'obligation' : 'preparation');
   const nightPlan = state.nightPlan?.until > now ? state.nightPlan : null;
   // The wait for daylight Jev chose, sealed, while it is being sealed.
-  if (state.sealedWait?.until > now && (bot.food ?? 20) < 18 && !underground) return make('wait_for_day_sealed', 'routine', { minutesToDawn: minutesToDawn(bot), healing: false, ...(underground ? { underground: true } : {}) });
+  if (!responsesOnly && state.sealedWait?.until > now && (bot.food ?? 20) < 18 && !underground) return make('wait_for_day_sealed', 'routine', { minutesToDawn: minutesToDawn(bot), healing: false, ...(underground ? { underground: true } : {}) });
   const hunting = nightPlan?.plan === 'hunt' && (nightPlan.food || shelterNeeded(bot));
   // A shooter is a threat as far as its own fire reaches (combat-estimate
   // RANGE, danger.js immediateThreat), hurt or not: being in its sight is
@@ -13807,7 +13860,7 @@ function claim(bot, goal = {}, survival = null) {
   // A hoglin hunt said with whether one can be won at this health and where
   // the nearest is: mid-235-q-nether-2-fortress-4 went on with one at 4
   // health, the hoglin 47 blocks off, told only "Health 4." (note 607).
-  if (hunting && !threat) {
+  if (!responsesOnly && hunting && !threat) {
     let hoglin = null;
     if (nightPlan.kind === 'hoglin') try {
       const { hoglinsKnown, hoglinFight } = require('./nether-travel');
@@ -13843,7 +13896,7 @@ function claim(bot, goal = {}, survival = null) {
   const pillarSays = onPillarTop(bot, state.pillar) ? require('./pillar-wait').pillarClaimSays(state, now) : null;
   const onPillar = pillarSays ? { onPillar: pillarSays } : {};
   if (threat) return make('escape_threat', 'pressing', { ...(threat.projectile ? { threat: { name: threat.entity.name, distance: round(threat.distance), projectile: true } }
-    : shooter(threat.entity) ? { threat: { ...mob(threat), ...firing(threat), ...reachOf(threat) }, healing: (bot.food ?? 0) >= 18 } : { threat: { ...mob(threat), ...reachOf(threat) } }), ...holding, ...edgeFact, ...pocket, ...onPillar });
+    : shooter(threat.entity) ? { threat: { ...mob(threat), ...firing(threat), ...reachOf(threat) }, healing: (bot.food ?? 0) >= 18 } : { threat: { ...mob(threat), ...reachOf(threat) } }), ...holding, ...edgeFact, ...pocket, ...onPillar }, 'response');
   // One that has stood off (danger.js standsOff, note 752): no threat that
   // stops the work, but still Jev's to answer or leave be, offered beside
   // the work as routine with that fact said: never at its reach, no nearer
@@ -13852,7 +13905,7 @@ function claim(bot, goal = {}, survival = null) {
   // comes nearer, to its reach, or its kind lands a hit, it is a threat
   // again and the work is stopped for it as before.
   const off = immediateThreat(bot, { stoodOff: true });
-  if (off) return make('escape_threat', 'routine', { threat: { ...mob(off), ...(shooter(off.entity) ? firing(off) : {}), ...reachOf(off) }, standsOff: off.stoodOff.seconds,
+  if (!responsesOnly && off) return make('escape_threat', 'routine', { threat: { ...mob(off), ...(shooter(off.entity) ? firing(off) : {}), ...reachOf(off) }, standsOff: off.stoodOff.seconds,
     ...(off.stance && bot._stance ? { stance: { choice: off.stance, secondsAgo: Math.round((now - bot._stance.at) / 1000) } } : heldStance.stance ? { stance: { ...heldStance.stance, other: true } } : {}), ...edgeFact, ...pocket, ...onPillar });
   // Something that can push the bot over a deadly drop beside it, though
   // it is no threat by the counts above (a shooter in sight past the
@@ -13860,19 +13913,19 @@ function claim(bot, goal = {}, survival = null) {
   // the fall's whole cost (note 586).
   if (pushOver) {
     const t = pushOver.pushers[0];
-    return make('escape_threat', 'pressing', { threat: t.projectile ? { name: t.entity.name, distance: round(t.distance), projectile: true } : shooter(t.entity) ? { ...mob(t), ...firing(t), ...reachOf(t) } : { ...mob(t), ...reachOf(t) }, ...(heldStance.stance ? { stance: { ...heldStance.stance, other: true } } : {}), ...edgeFact, ...pocket });
+    return make('escape_threat', 'pressing', { threat: t.projectile ? { name: t.entity.name, distance: round(t.distance), projectile: true } : shooter(t.entity) ? { ...mob(t), ...firing(t), ...reachOf(t) } : { ...mob(t), ...reachOf(t) }, ...(heldStance.stance ? { stance: { ...heldStance.stance, other: true } } : {}), ...edgeFact, ...pocket }, 'response');
   }
   // The others of the kind hunted, in sight within their fire's reach
   // (danger.js huntKin, note 1028): offered beside the hunt and the work as
   // routine; chosen, the stance is asked of them all.
   const kin = immediateThreat(bot, { huntKin: true });
-  if (kin) return make('escape_threat', 'routine', { threat: { ...mob(kin), ...firing(kin) }, huntKin: { name: kin.entity.name, inSight: kin.huntKin.length, distances: kin.huntKin.slice(0, 5).map(t => round(t.distance)) },
+  if (!responsesOnly && kin) return make('escape_threat', 'routine', { threat: { ...mob(kin), ...firing(kin) }, huntKin: { name: kin.entity.name, inSight: kin.huntKin.length, distances: kin.huntKin.slice(0, 5).map(t => round(t.distance)) },
     ...(heldStance.stance ? { stance: { ...heldStance.stance, other: true } } : {}), ...edgeFact, ...pocket, ...onPillar });
   // sleepDebt() without its first-look write of sleptAtAge.
   const debt = Number.isFinite(worldAge(bot)) && Number.isFinite(state.sleptAtAge) && worldAge(bot) - state.sleptAtAge > SLEEP_DEBT_TICKS;
   const nightFree = nightFreeBelow(bot, goal, state, { underground, debt, now });
-  const needsShelter = shelterNeeded(bot) && !nightFree && nightPlan?.plan !== 'stay_up' && nightPlan?.plan !== 'hunt' && !(state.nightRecover?.until > now);
-  if (!needsShelter && state.recovery?.status === 'pending' && !(state.recovery.dimension && state.recovery.dimension !== bot.game?.dimension)) return make('recover_items', 'routine', { dropsAt: state.recovery.position || null });
+  const needsShelter = !responsesOnly && shelterNeeded(bot) && !nightFree && nightPlan?.plan !== 'stay_up' && nightPlan?.plan !== 'hunt' && !(state.nightRecover?.until > now);
+  if (!responsesOnly && !needsShelter && state.recovery?.status === 'pending' && !(state.recovery.dimension && state.recovery.dimension !== bot.game?.dimension)) return make('recover_items', 'routine', { dropsAt: state.recovery.position || null });
   const expeditionFood = ((goal.preparingExpedition && goal.kind !== 'win') || goal.preparingEnd || goal.preparingNether) && bot.game?.difficulty !== 'peaceful';
   const reserve = require('./food-reserve');
   const desiredFood = reserve.wanted(bot, goal).points;
@@ -13890,7 +13943,7 @@ function claim(bot, goal = {}, survival = null) {
   // For the reserve alone with the work's own step the food: the work has
   // it, no claim (note 771).
   const workHasIt = errands.reserveOnly(bot, supply) && (errands.workIsFood(goal) || (errands.crossingReserve(goal) && !reserve.short(bot, goal, supply)));
-  const needsFood = !workHasIt && !errands.met(bot, supply, reserve.floorFor(bot, goal)) && supply < desiredFood && ((hungry && !(stockRests && fills)) || (stockDriven && !stockRests));
+  const needsFood = !workHasIt && !errands.met(bot, supply, reserve.floorFor(bot, goal)) && supply < desiredFood && ((hungry && !(stockRests && fills)) || (!responsesOnly && stockDriven && !stockRests));
   // A night mine Jev chose from a pocket holds the turn under the rock until
   // dawn or until it ends, as a chosen stance does (note 755b): with the
   // night "free" below, survival claimed nothing, the work's sheep search
@@ -13902,7 +13955,7 @@ function claim(bot, goal = {}, survival = null) {
   // chosen was dropped for it): not when the mine would not dig a block,
   // not when it has mined nothing for NIGHT_MINE_IDLE_MS, and never over a
   // food errand the bot chose.
-  if (!needsShelter && shelterNeeded(bot) && nightMineHolds(bot, state, survival, now) && !threat) return make('night_mine', 'routine', {
+  if (!responsesOnly && !needsShelter && shelterNeeded(bot) && nightMineHolds(bot, state, survival, now) && !threat) return make('night_mine', 'routine', {
     nightMine: { minutes: Math.round((now - (state.nightMine.startedAt || now)) / 60000), mined: state.nightMine.mined || 0 }, minutesToDawn: minutesToDawn(bot) });
   if (!needsShelter && !needsFood) return null;
   // Food or the work, Jev's answer held (food-plan.js, note 784): the work
@@ -13944,7 +13997,7 @@ function claim(bot, goal = {}, survival = null) {
   const offWorldTrip = needsFood && offWorld ? (() => { try { return require('./game-progress').portalTrip(bot, goal); } catch (_) { return null; } })() : null;
   const made = make(needsShelter ? (plan === 'home' ? 'go_home_for_night' : 'secure_shelter') : 'obtain_food', (needsShelter && !quietNight) || bot.food <= 6 || (needsFood && noHeal && hp <= 6) ? 'pressing' : 'routine',
     { ...(needsShelter ? { night: true, underground, ...(plan ? { plan } : {}), ...way, ...(underground && debt ? { sleepDebt: true } : {}), ...mining, sealFor: sealFor.says, ...bedFacts(bot) } : {}), ...(needsFood ? { foodCarried: supply, foodWanted: desiredFood, ...(last.points ? { lastResortCarried: last.points } : {}), ...foodCost(bot, goal, state, supply, hungry, now), ...(offWorldTrip ? { portalTrip: offWorldTrip } : {}) } : {}),
-      ...(wait ? { waitSealedMinutes: wait.minutes, ...(wait.day ? { waitSealedDayNow: true } : {}) } : {}) });
+      ...(wait ? { waitSealedMinutes: wait.minutes, ...(wait.day ? { waitSealedDayNow: true } : {}) } : {}) }, !needsShelter && needsFood && hungry ? 'response' : 'preparation');
   // The claim for food: the plan held said on it, with the hunger's drain
   // to its next line; and Jev's answer to it at turn_priority (the turn to
   // the food, or to the work over it) begun as the food plan, so the same
@@ -13953,6 +14006,7 @@ function claim(bot, goal = {}, survival = null) {
   // is said as such (note 771c), so the food holds over the work's own
   // questions (rung_progress, the stall's) once chosen.
   if (made.action === 'obtain_food') {
+    made.facts.need = noHeal ? 'heal' : hungry ? 'hunger' : 'reserve';
     const d = fp.drain(bot, supply);
     made.facts.hungerDrain = d.says;
     if (noHeal) made.facts.cannotHeal = `health ${round(hp)} does not come back: hunger ${bot.food}, under eighteen, and nothing safe carried to eat`;

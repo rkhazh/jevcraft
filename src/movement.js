@@ -178,6 +178,7 @@ class SurvivalMovements extends Movements {
   // house or a portal keeps its exclusion (exclusionBreak), and what is not
   // a building block (a chest, a bed, obsidian) is not dug this way.
   safeToBreak(block) {
+    if (!require('./mutation-authority').queryMutation(this.bot, 'dig', block?.position).allowed) return false;
     if (this.bot._registeredStructureProtection?.(block?.position)) return false;
     if (super.safeToBreak(block)) return true;
     if (!this.canDig || !block?.type || !block.position || !this.blocksCantBreak.has(block.type)) return false;

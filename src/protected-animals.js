@@ -10,8 +10,9 @@ const PROTECTED = new Set([]);
 
 class ProtectedAnimal extends Error { constructor(message) { super(message); this.name = 'ProtectedAnimal'; } }
 
-const isProtected = entity => !!entity && PROTECTED.has(entity.name);
-const live = (bot, e) => isProtected(e) && e.isValid !== false && e.position && bot.entities?.[e.id] === e;
+const isProtected = (entity, bot) => !!entity && (PROTECTED.has(entity.name) || !!bot && !require('./interaction-guard').attackAllowed(bot, entity));
+const live = (bot, e) => e !== bot.entity && isProtected(e, bot) && e.isValid !== false && e.position && bot.entities?.[e.id] === e &&
+  (e.type === 'player' || bot.registry?.entitiesByName?.[e.name]?.metadataKeys?.includes('health'));
 
 // A sword's sweep reaches whatever stands within a block of the target;
 // counted generously, two and a half blocks of its middle.
@@ -40,10 +41,12 @@ const sweeps = bot => /_sword$/.test(bot.heldItem?.name || '') && !!bot.entity?.
   !(bot.getControlState ? bot.getControlState('sprint') : bot.controlState?.sprint);
 
 function installGuard(bot) {
+  require('./interaction-guard').installGuard(bot);
   if (!bot || bot._protectedGuard || typeof bot.attack !== 'function') return;
   const attack = bot.attack.bind(bot);
   bot._protectedGuard = { refused: 0 };
   bot.attack = (target, ...rest) => {
+    require('./interaction-guard').assertAttack(bot, target, { sweep: true });
     if (isProtected(target)) { bot._protectedGuard.refused++; throw new ProtectedAnimal(`Never a ${target.name}: the swing was refused`); }
     const near = sweeps(bot) ? nearTarget(bot, target) : [];
     if (near.length) { bot._protectedGuard.refused++; throw new ProtectedAnimal(`A ${near[0].name} beside the ${target?.name || 'target'} would be caught by the sword's sweep: the swing was refused`); }

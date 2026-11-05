@@ -180,7 +180,8 @@ const CRIT_MISS_MS = 8000;
 const BYSTANDERS = new Set(['zombified_piglin', 'piglin', 'enderman']);
 function bystanders(bot, target) {
   const { provoked } = require('./danger');
-  return Object.values(bot.entities || {}).filter(e => (BYSTANDERS.has(e.name) || require('./protected-animals').isProtected(e)) && e !== target && e.isValid !== false && e.position &&
+  const protectedNearby = new Set(require('./protected-animals').nearTarget(bot, target));
+  return Object.values(bot.entities || {}).filter(e => (BYSTANDERS.has(e.name) || protectedNearby.has(e)) && e !== bot.entity && e !== target && e.isValid !== false && e.position &&
     target.position && e.position.distanceTo(target.position) <= 2.5 && !provoked(bot, e));
 }
 // The same for a swing made outside strike(): true when the swing sweeps
