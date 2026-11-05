@@ -36,6 +36,14 @@ function standingAffordances(bot,{enabled=false,now=()=>Date.now()/1000}={}){
  return result;
 }
 function blocked(message){return Object.assign(new Error(message),{name:'Blocked',personaMoveTerminal:true});}
+// Native movement owns transit collision/step geometry. A node may be a slab,
+// stair or doorway rather than a place suitable for stopping and inspecting.
+function transitAllowed(bot,node,anchor){
+ const p={x:node.x+.5,y:node.y,z:node.z+.5};
+ if(!point(p)||Math.hypot(p.x-anchor.x,p.y-anchor.y,p.z-anchor.z)>RANGE)return false;
+ if(node.toBreak?.length||node.toPlace?.some(effect=>!effect.useOne))return false;
+ return [-1,0,1].every(dy=>{const block=bot.blockAt(new Vec3(node.x,node.y+dy,node.z));return !!block&&!HAZARD.test(block.name);});
+}
 async function moveStep(bot,task,goal,save,{timeoutMs=15000,checkIntervalMs=100}={}){
  task.check();const policy=goal.personaMovePolicy,p=goal.target;
  if(!policy||dimension(bot)!==policy.dimension||!canMove(bot,p,{enabled:true,anchor:policy.anchor}))throw blocked('Local move target is no longer safe, loaded or within its admitted bounds');
@@ -44,14 +52,15 @@ async function moveStep(bot,task,goal,save,{timeoutMs=15000,checkIntervalMs=100}
  const original=bot.pathfinder?.movements;if(!original)throw blocked('Local movement unavailable');
  const movement=Object.assign(Object.create(Object.getPrototypeOf(original)),original,{canDig:false,allow1by1towers:false,scafoldingBlocks:[],allowParkour:false,allowFreeMotion:false,canOpenDoors:false,maxDropDown:1,allowSprinting:false});
  movement.blocksToAvoid=new Set(original.blocksToAvoid||[]);for(const block of Object.values(bot.registry?.blocksByName||{}))if(HAZARD.test(block.name))movement.blocksToAvoid.add(block.id);
- const neighbors=movement.getNeighbors;movement.getNeighbors=function(node){return neighbors.call(this,node).filter(n=>!(n.toBreak?.length||n.toPlace?.length)&&canMove(bot,{x:n.x+.5,y:n.y,z:n.z+.5},{enabled:true,anchor:policy.anchor}));};
+ const neighbors=movement.getNeighbors;movement.getNeighbors=function(node){return neighbors.call(this,node).filter(n=>transitAllowed(bot,n,policy.anchor));};
  goal.step={action:'move',target:{...p},position:{...p}};save();
  let timer,checks;bot.pathfinder.setMovements(movement);
+ const destination=new goals.GoalNear(p.x,p.y,p.z,1),doorUse=require('./doors').guardNavigationDoors(bot,task,destination);
  try{
-  const guard=new Promise((_,reject)=>{timer=setTimeout(()=>reject(blocked('Local move timed out without verified arrival')),timeoutMs);checks=setInterval(()=>{try{task.check();if(dimension(bot)!==policy.dimension||!safeStanding(bot,p))throw blocked('Local move destination changed');}catch(err){reject(err)}},checkIntervalMs)});
-  await Promise.race([bot.pathfinder.goto(new goals.GoalNear(p.x,p.y,p.z,1)),guard]);task.check();
+  const guard=new Promise((_,reject)=>{timer=setTimeout(()=>reject(blocked('Local move timed out without verified arrival')),timeoutMs);checks=setInterval(()=>{try{task.check();if(doorUse.error)throw doorUse.error;if(dimension(bot)!==policy.dimension||!safeStanding(bot,p))throw blocked('Local move destination changed');}catch(err){reject(err)}},checkIntervalMs)});
+  await Promise.race([bot.pathfinder.goto(destination),guard]);task.check();if(doorUse.error)throw doorUse.error;
   if(distance()>ARRIVAL)throw blocked('Local move ended without verified arrival');return true;
  }catch(err){if(['Cancelled','NeedsAir','NeedsSafety','Stalled'].includes(err.name))throw err;throw blocked(String(err.message||'Local route unavailable').slice(0,240));}
- finally{clearTimeout(timer);clearInterval(checks);bot.pathfinder.setGoal(null);bot.clearControlStates();bot.pathfinder.setMovements(original);}
+ finally{clearTimeout(timer);clearInterval(checks);doorUse.restore();bot.pathfinder.setGoal(null);bot.clearControlStates();bot.pathfinder.setMovements(original);}
 }
 module.exports={RANGE,ARRIVAL,safeStanding,canMove,moveStep,standingAffordances};

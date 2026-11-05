@@ -9,8 +9,9 @@ function claimEligible(goal, claim){
 }
 // The survival runner enforces the same eligibility rule, including backstops.
 // Holding does not tether an admitted escape or recovery to a fixed anchor.
-async function idleBackgroundStep({hold=false,survive,loot,work,stopMotion}){
+async function idleBackgroundStep({hold=false,survive,restore,loot,work,stopMotion}){
  if(await survive())return 'survival';
+ if(restore&&await restore())return 'restoration';
  if(hold){stopMotion();return 'hold';}
  if(await loot())return 'loot';
  await work();return 'work';

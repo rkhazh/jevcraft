@@ -1874,7 +1874,7 @@ const openForStation = (bot, q) => {
 const STATION_CELL_REST_MS = 10 * 60000;
 const stationKey = q => `${q.x},${q.y},${q.z}`;
 function stationCellOk(bot, goal, q) {
-  return openForStation(bot, q) && !hitboxIntrudes(bot, q, 0) && !(goal && isSetAside(goal, 'station_cell', stationKey(q)));
+  return require('./mutation-authority').queryMutation(bot,'place',q).allowed && openForStation(bot, q) && !hitboxIntrudes(bot, q, 0) && !(goal && isSetAside(goal, 'station_cell', stationKey(q)));
 }
 // A cell the game refused a workstation in rests, said, and the next is tried.
 function restStationCell(goal, q, name, err) {
@@ -1922,6 +1922,7 @@ async function place(bot, task, p, material, { face, properties, stay = false, r
   const cell = { ...p, material, properties };
   const placementComplete = () => exact ? buildFootprint(cell).every(part => matchesBuildBlock(bot.blockAt(pos(part)),part)) : buildCellComplete(bot,cell);
   if (placementComplete()) return;
+  if(properties?.type==='single')require('./build-blocks').assertPlacementFootprint(bot,p,material);
   // Walling in on a ledge: a cell that needs the bot to step aside, back
   // off or walk closer is left, never moved for. Sealing on a Nether ledge
   // with a piglin about, the dream run stepped back off it into the lava
@@ -1993,10 +1994,10 @@ async function place(bot, task, p, material, { face, properties, stay = false, r
       // looking at the click point from a diagonal rounded a west stair to
       // south: the build then waited on a block that could never match. Face
       // the wanted direction exactly and click without turning again.
-      const facingYaw = PLACEMENT_YAW[properties?.facing];
+      const facingYaw = PLACEMENT_YAW[require('./build-blocks').placementFacing(material,properties?.facing)];
       if (facingYaw !== undefined) {
         const target = face?.to || ref.position.offset(0.5, 0.5, 0.5), eyes = bot.entity.position.offset(0, 1.62, 0);
-        await bot.look(facingYaw, Math.atan2(target.y - eyes.y, Math.hypot(target.x - eyes.x, target.z - eyes.z)), true);
+        await bot.look(facingYaw, require('./build-blocks').placementPitch(material,Math.atan2(target.y - eyes.y, Math.hypot(target.x - eyes.x, target.z - eyes.z))), true);
         // The turn reaches the server with the next movement packet, but the
         // click goes at once: a stair placed straight after walking took the
         // walking direction. Let the turn go out first.
@@ -3282,11 +3283,42 @@ function rememberWorkstation(bot, goal, name, p) {
   if (goal) { goal.placedWorkstations = [...new Set([...(goal.placedWorkstations || []), key])].slice(-16); }
 }
 function forgetWorkstation(bot, goal, key) {
+  const xyz=key.match(/:\((-?\d+), (-?\d+), (-?\d+)\)$/);
+  if(xyz){const p=new Vec3(...xyz.slice(1).map(Number));if(!air(bot.blockAt(p))||require('./mutation-authority').pendingRestorations(bot).some(r=>r.position.x===p.x&&r.position.y===p.y&&r.position.z===p.z))return false;}
   bot._ownedWorkstations?.delete(key);
   if (goal?.placedWorkstations) goal.placedWorkstations = goal.placedWorkstations.filter(k => k !== key);
 }
 function recallWorkstations(bot, goal) {
   for (const key of goal?.placedWorkstations || []) (bot._ownedWorkstations ||= new Set()).add(key);
+}
+
+// Restore the existing receipt's desired-air obligation, independently of the
+// goal that happened to need a utility. Survival runs first; no new resource
+// work is commissioned here, and a replacement never inherits ownership.
+async function restoreTemporaryPlacements(bot,task,goal,save,{navigate:travel=navigate,dig:remove=dig,projectId,completion=false}={}){
+  if(goal.holdWorkstation||goal.smelting||goal.smeltingSides?.length)return false;
+  const authority=require('./mutation-authority'),pending=authority.pendingRestorations(bot).filter(r=>(!projectId||r.restore.project_id===projectId)&&(!completion||r.restore.project_id===goal.buildId||goal.placedWorkstations?.includes(`${r.material}:${pos(r.position)}`)));
+  if(!pending.length){delete goal.temporaryCleanup;return false;}
+  const target=r=>`${r.dimension}:${r.restore.project_id}:${stationKey(r.position)}`;
+  const blocked=r=>bot.entity.position.distanceTo(pos(r.position))>8?'cleanup_out_of_local_reach':isSetAside(goal,'temporary_cleanup',target(r))?'cleanup_resting':authority.queryMutation(bot,'dig',pos(r.position)).allowed?null:authority.queryMutation(bot,'dig',pos(r.position)).reason;
+  const selected=pending.find(r=>!blocked(r));
+  if(!selected){const r=pending[0];goal.temporaryCleanup={project_id:r.restore.project_id,position:r.position,status:'blocked',reason:blocked(r)};save();return false;}
+  const p=pos(selected.position);
+  goal.temporaryCleanup={project_id:selected.restore.project_id,position:selected.position,status:'pending',source:selected.source,placed_at:selected.at};
+  goal.step={action:'restore_temporary_placement',...goal.temporaryCleanup};save();
+  return require('./action-scope').withActionScope(bot,'restoration',goal,async()=>{
+    try {
+    task.check();
+    await travel(bot,task,new goals.GoalGetToBlock(p.x,p.y,p.z),{timeoutMs:8000,stallMs:3000});
+    task.check();await remove(bot,task,p,{requireDrops:false});
+    await waitFor(task,()=>air(bot.blockAt(p))&&!authority.pendingRestorations(bot).some(r=>r.position.x===p.x&&r.position.y===p.y&&r.position.z===p.z),5000,()=>`server confirmation that temporary ${selected.material} at ${p} is restored to air`);
+    forgetWorkstation(bot,goal,`${selected.material}:${p}`);
+    attemptsFor(goal).clear('temporary_cleanup',target(selected));
+    goal.temporaryCleanup={...goal.temporaryCleanup,status:'restored'};save();return true;
+    }catch(error){task.check();if(['NeedsAir','NeedsSafety','Cancelled','Stalled'].includes(error.name))throw error;
+      setAside(goal,'temporary_cleanup',target(selected),error);goal.temporaryCleanup={...goal.temporaryCleanup,status:'blocked',reason:String(error.message).slice(0,200)};save();return false;
+    }
+  });
 }
 
 async function workstation(bot, task, name, goal) {
@@ -3335,7 +3367,7 @@ async function workstation(bot, task, name, goal) {
   if (!p) {
     const notch = [0, 1].flatMap(dy => faces.slice(1, 5).map(d => o.plus(d).offset(0, dy, 0))).find(q => {
       const b = bot.blockAt(q);
-      return stationPermitted(q)&&b?.boundingBox === 'block' && b.diggable && !reservedForConstruction(goal || {}, q, { from: o }) && bot.blockAt(q.offset(0, -1, 0))?.boundingBox === 'block' &&
+      return stationPermitted(q)&&require('./mutation-authority').queryMutation(bot,'dig',q).allowed&&b?.boundingBox === 'block' && b.diggable && !reservedForConstruction(goal || {}, q, { from: o }) && bot.blockAt(q.offset(0, -1, 0))?.boundingBox === 'block' &&
         !faces.some(f => /lava|water/.test(bot.blockAt(q.plus(f))?.name || ''));
     });
     if (notch) {
@@ -4913,6 +4945,7 @@ async function decideAction(bot, task, goal, save, client, onStep, tree, context
 }
 
 async function designedBuildStep(bot, task, goal, save, client, onStep) {
+  if(await restoreTemporaryPlacements(bot,task,goal,save,{projectId:goal.buildId}))return false;
   // Mineflayer emits this only for placements performed by this bot, including
   // pathfinder scaffolding. Persist ownership so resume can clear that access.
   const placed = (_old, block) => {
@@ -10402,6 +10435,7 @@ async function runIdle(bot, task, goal, store, { survival, decisionClient, recov
         await require('./persona-idle').idleBackgroundStep({
           hold: goal.personaHold === true,
           survive: async () => (!turn || turn.unclaimed) && await survival.step(task, goal, save, onStep),
+          restore: () => restoreTemporaryPlacements(bot,task,goal,save),
           loot: () => lootNearby(bot, task, goal, save, lootActions()),
           work: () => idleWork(bot, task, goal, save, decisionClient, onStep),
           stopMotion: () => { bot.pathfinder.setGoal(null); bot.clearControlStates(); goal.step = { action: 'persona_hold' }; require('./turn').takeTurn(bot,'work','persona_hold'); },
@@ -10729,6 +10763,7 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
       goal.history.push({ time: new Date().toISOString(), step: goal.step, inventory: inventory(bot), position: { ...bot.entity.position }, dimension: bot.game.dimension });
       goal.history = goal.history.slice(-40);
       if (complete) {
+        if(await restoreTemporaryPlacements(bot,task,goal,save,{completion:true})){save();onStep(goal);continue;}
         if (goal.kind === 'house') survival.rememberHouse(goal.blueprint);
         bot.buildRegistry?.remember(goal, { dimension: dimension(bot), status: 'complete' });
         goal.status = 'complete'; goal.completedAt = new Date().toISOString(); save();
@@ -10864,4 +10899,4 @@ function constructionObservation(bot, goal) {
   return JSON.stringify(positions.map(p => [p.x, p.y, p.z, bot.blockAt(pos(p))?.stateId ?? bot.blockAt(pos(p))?.name ?? null]));
 }
 
-module.exports = { decideAction, atOwnDropsInWater, clearLineToOre, bedBackSays, takeUpFoodSays, woodLeftSays, oreUseSays, ruinSays, buildSays, mineAtSource, nightMineLeftSays, NIGHT_MINES_LEFT, cookTimeSays, rawCostSays, FOOD_POINTS_A_MINUTE, noteClimb, climbsLatelySays, bedFromPockets, portalToJudge, capLavaBeside, portalPickaxeFirst, endPortalActions, miningCandidates, portalSurfaceFirst, nightUpSays, oreToTunnel, gatherRests, gatherResting, relightPortalAt, stairPickaxeWanted, pickaxeForStair, siteHoldEnds, exploreLand, exploreLandIds, woodWhileUp, WOOD_UP, wantedItems, keepRoom, tidyMoment, smeltBatch, ladderSmeltWants, foodReservePrice, siteByLava, foodTrips, supportMaterialHere, preparePortalSupports, portalJobs, castSiteCost, castSiteSays, NO_WOOD_DEEP, smeltNeedSays, takeBackPlace, detourWork, restWork, restWorkSays, upkeepOffers, kitFoodStep, foodNearFrame, cookable, FUELS, answerOrPutOff, opensPit, persist, returnFromNether, climbSays, holdForRest, liveTurn, workClaim, methodSoFar, gatherBlocks, sculkStep, opensLava, descentTargets, portalInteriorBlockers, nearestLava, lavaGone, mineAtSource, timed, portalHere, walkToKnownPortal, portalWay, lineSays, buildPortalFrame, ruinSays, portalMethod, portalStep, crossingKitReady, walksFailed, occupant, bodyIn, occupiedSays, waitingThere, settleCraftInventory, tripTime, WOOD_RESERVE, woodUnits, crossingWater, sideTrips, plugLeak, leakResponse, logInView, patrolChoice, upkeepStep, moreOfSource, whileCooking, workstation, noteError, localBatch, takeOutBatch, castUnderWay, leftBatch, batchNoRoute, LEAVE_BATCH_MS, smelt, turnSearch, searchFor, enterPortal, gameHandlers, breakStillness, reachableBlocks, hitboxIntrudes, terrainShortage, runGoal, runIdle, idleWork, idleOptions, createSurvival, acquireStep, inventory, planningInventory, catalogPlan, selectSite, explore, dig, place, waitFor, constructionObservation, Blocked, designedBuildStep, surfaceStep, surfaceTrip, answerStall, looseEnds, breakOut, tunnelToward, stairsOrWay, craft, gatherWood, moveOnFromResource, moveOnHistorySays, pickaxeCraftHistorySays, maintainPickaxe, MOVE_ON_MEMORY_MS, PICKAXE_CRAFT_MEMORY_MS, stationCellOk, droppedFoodNear, planDueNow, planRoutes, lavaKnownFrom, straightToward };
+module.exports = { restoreTemporaryPlacements, decideAction, atOwnDropsInWater, clearLineToOre, bedBackSays, takeUpFoodSays, woodLeftSays, oreUseSays, ruinSays, buildSays, mineAtSource, nightMineLeftSays, NIGHT_MINES_LEFT, cookTimeSays, rawCostSays, FOOD_POINTS_A_MINUTE, noteClimb, climbsLatelySays, bedFromPockets, portalToJudge, capLavaBeside, portalPickaxeFirst, endPortalActions, miningCandidates, portalSurfaceFirst, nightUpSays, oreToTunnel, gatherRests, gatherResting, relightPortalAt, stairPickaxeWanted, pickaxeForStair, siteHoldEnds, exploreLand, exploreLandIds, woodWhileUp, WOOD_UP, wantedItems, keepRoom, tidyMoment, smeltBatch, ladderSmeltWants, foodReservePrice, siteByLava, foodTrips, supportMaterialHere, preparePortalSupports, portalJobs, castSiteCost, castSiteSays, NO_WOOD_DEEP, smeltNeedSays, takeBackPlace, detourWork, restWork, restWorkSays, upkeepOffers, kitFoodStep, foodNearFrame, cookable, FUELS, answerOrPutOff, opensPit, persist, returnFromNether, climbSays, holdForRest, liveTurn, workClaim, methodSoFar, gatherBlocks, sculkStep, opensLava, descentTargets, portalInteriorBlockers, nearestLava, lavaGone, mineAtSource, timed, portalHere, walkToKnownPortal, portalWay, lineSays, buildPortalFrame, ruinSays, portalMethod, portalStep, crossingKitReady, walksFailed, occupant, bodyIn, occupiedSays, waitingThere, settleCraftInventory, tripTime, WOOD_RESERVE, woodUnits, crossingWater, sideTrips, plugLeak, leakResponse, logInView, patrolChoice, upkeepStep, moreOfSource, whileCooking, workstation, noteError, localBatch, takeOutBatch, castUnderWay, leftBatch, batchNoRoute, LEAVE_BATCH_MS, smelt, turnSearch, searchFor, enterPortal, gameHandlers, breakStillness, reachableBlocks, hitboxIntrudes, terrainShortage, runGoal, runIdle, idleWork, idleOptions, createSurvival, acquireStep, inventory, planningInventory, catalogPlan, selectSite, explore, dig, place, waitFor, constructionObservation, Blocked, designedBuildStep, surfaceStep, surfaceTrip, answerStall, looseEnds, breakOut, tunnelToward, stairsOrWay, craft, gatherWood, moveOnFromResource, moveOnHistorySays, pickaxeCraftHistorySays, maintainPickaxe, MOVE_ON_MEMORY_MS, PICKAXE_CRAFT_MEMORY_MS, stationCellOk, droppedFoodNear, planDueNow, planRoutes, lavaKnownFrom, straightToward };

@@ -64,6 +64,13 @@ function watchServer(bot) {
   return (bot._serverWatch = { watchers });
 }
 
+// Subscribe to the same normalized authoritative stream used by dig
+// confirmation. A local optimistic world update never reaches this listener.
+function observeServerBlocks(bot,listener){
+  const watch=watchServer(bot);watch.watchers.add(listener);
+  return ()=>watch.watchers.delete(listener);
+}
+
 // Listen for the server's word about one cell. `until(ms, differs)` is true
 // when it spoke (with a state other than `was`, when differs), false when
 // the time ran out.
@@ -295,4 +302,4 @@ function serverTruthPlugin(bot) {
     noteLoop: details => noteLoop(bot, details), says: options => correctionSays(bot, options), suspectCells: options => suspectCells(bot, options) };
 }
 
-module.exports = { serverTruthPlugin, askServer, resyncAround, suspectCells, correctionSays, noteLoop, confirmDigs, probeHand, referenceFor, hear, CONFIRM_MS };
+module.exports = { observeServerBlocks, serverTruthPlugin, askServer, resyncAround, suspectCells, correctionSays, noteLoop, confirmDigs, probeHand, referenceFor, hear, CONFIRM_MS };

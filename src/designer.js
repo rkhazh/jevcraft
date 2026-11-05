@@ -2,7 +2,7 @@
 const { Vec3 } = require('vec3');
 const { surfaceObserver } = require('./surface');
 const { checkAir } = require('./vitals');
-const { isBed, regionProperties, buildFootprint, matchesOwnership } = require('./build-blocks');
+const { furnishingPlacement, isBed, regionProperties, buildFootprint, matchesOwnership } = require('./build-blocks');
 const { isDoor, isWoodenDoor } = require('./doors');
 const { thinking } = require('./speech');
 const MODEL = 'anthropic/claude-opus-5.5';
@@ -62,7 +62,7 @@ const naturalGround = b => b?.boundingBox === 'block' && /^(grass_block|dirt|coa
 function buildPalette(registry) {
   return registry.blocksArray.filter(b => registry.itemsByName[b.name] && b.boundingBox === 'block' &&
     b.diggable !== false && b.hardness >= 0 &&
-    (/_(planks|concrete|terracotta|wool|bricks|stained_glass|stairs|slab)$/.test(b.name) || isWoodenDoor(registry, b.name) || isBed(b.name) ||
+    (/_(planks|concrete|terracotta|wool|bricks|stained_glass|stairs|slab)$/.test(b.name) || isWoodenDoor(registry, b.name) || isBed(b.name) || furnishingPlacement(b.name) ||
       ['glass', 'stone', 'smooth_stone', 'cobblestone', 'mossy_cobblestone', 'bricks', 'quartz_block', 'smooth_quartz',
         'sandstone', 'smooth_sandstone', 'red_sandstone', 'polished_andesite', 'polished_diorite', 'polished_granite',
         'dirt', 'terracotta', 'sea_lantern', 'glowstone', 'diamond_block', 'iron_block', 'gold_block', 'emerald_block', 'copper_block', 'lapis_block', 'coal_block', 'redstone_block', 'netherite_block'].includes(b.name))).map(b => b.name).sort();
@@ -107,6 +107,9 @@ function validateSchematic(input, registry) {
       if (region.block === 'air') { cells.delete(key(p)); carved.add(key(p)); }
       else { carved.delete(key(p)); cells.set(key(p), { ...p, material: region.block, ...(properties && { properties }) }); }
     }
+  }
+  for(const cell of cells.values())if(furnishingPlacement(cell.material)==='single_container'){
+    for(const [dx,dz]of [[1,0],[-1,0],[0,1],[0,-1]])if(cells.get(key({...cell,x:cell.x+dx,z:cell.z+dz}))?.material===cell.material)fail('single-container furnishings cannot adjoin matching chests');
   }
   for (const cell of [...cells.values()].filter(p => isDoor(p.material))) {
     const upper = buildFootprint(cell)[1], floor = cells.get(key({ ...cell, y: cell.y - 1 }));

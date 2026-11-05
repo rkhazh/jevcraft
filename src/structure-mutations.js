@@ -55,6 +55,7 @@ async function withMutationExpectation(bot,{operation,position,name,stateId,chec
 }
 function mutationCells(bot,operation,p){
  const block=operation==='dig'?bot.blockAt(p):null,material=block?.name||bot.heldItem?.name,properties=block?.getProperties?.()||{};
+ if(operation==='place'&&authority.hasMutationAuthority(bot))require('./build-blocks').assertPlacementFootprint(bot,p,material);
  if(operation==='dig'&&material?.endsWith('_door')&&!['upper','lower'].includes(properties.half))throw new Error('Unknown door half');
  if(material?.endsWith('_door'))return [p,p.offset(0,operation==='dig'&&properties.half==='upper'?-1:1,0)];
  if(material?.endsWith('_bed')){
@@ -124,7 +125,7 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
   const attempted=permits.getStore(),build=attempted?.bot===bot;
   if(build&&!permit)return {allowed:false,reason:'validated_build_operation_required'};
   const results=cells.map(cell=>authority.queryMutation(bot,operation,cell,{build,projectId:permit?.goal.buildId}));
-  return results.find(r=>!r.allowed)||results[0];
+  return results.find(r=>!r.allowed)||{...results[0],restores:Object.fromEntries(results.flatMap((r,i)=>r.restore?[[key(cells[i]),r.restore]]:[]))};
  }
  // Mineflayer waits for lookAt before dispatch, and finishes digs in a timer.
  // Recheck at the actual write rather than trusting an earlier wrapper check.
@@ -155,8 +156,9 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
    const cells=mutationCells(bot,operation,p),permit=permitFor(operation,p,cells);
    if(scope&&operation==='place')scope.placedCells=cells;
    if(scope)scope.attribution=attribution(permit);
-   if(scope?.permit&&!permit||cells.some(protectedAt)&&!permit&&!suffocationEscape(operation,p))error=refuse(operation,p);
+   if(scope?.permit&&!permit||!shared&&cells.some(protectedAt)&&!permit&&!suffocationEscape(operation,p))error=refuse(operation,p);
    const allowed=permission(operation,p,cells,permit);
+   if(scope)scope.restores=allowed.restores;
    if(!error&&!allowed.allowed&&!cells.every(cell=>suffocationEscape(operation,cell)))error=authorityRefused(operation,p,allowed.reason);
    if(!error&&permit&&operation==='dig'){
     const restore=cells.filter(cell=>!require('./designer').canClearSchematicBlock(permit.goal.blueprint,permit.goal.buildOwned,bot.blockAt(cell)));
@@ -206,7 +208,7 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
    if(operation==='place'&&args[2]?.offhand)throw refuse(operation,p);
    if(operation==='place'&&authority.hasMutationAuthority(bot))placedBlockName(args[0].position,args[1]?.y===1?1:-1);
    const cells=mutationCells(bot,operation,p),protectedCell=cells.some(protectedAt),permit=permitFor(operation,p,cells),allowed=permission(operation,p,cells,permit),emergency=!permit&&cells.every(cell=>suffocationEscape(operation,cell));
-   if(protectedCell&&!permit&&!emergency){audit({operation,position:{x:p.x,y:p.y,z:p.z},status:'refused',reason:'registered_structure',...attribution(null)});throw refuse(operation,p);}
+   if(!authority.hasMutationAuthority(bot)&&protectedCell&&!permit&&!emergency){audit({operation,position:{x:p.x,y:p.y,z:p.z},status:'refused',reason:'registered_structure',...attribution(null)});throw refuse(operation,p);}
    if(!allowed.allowed&&!emergency){audit({operation,position:{x:p.x,y:p.y,z:p.z},status:'refused',reason:allowed.reason,...attribution(null)});throw authorityRefused(operation,p,allowed.reason);}
    const witness={client:bot._client,dimension:bot.game?.dimension};
    const before=bot.blockAt(p);let acknowledgedState=null,placed=false;
@@ -216,20 +218,20 @@ function installStructureMutationGuard(bot,{validGoal=()=>false,record=()=>{}}={
    const placement=(_old,block)=>{if(block?.position&&key(block.position)===key(p)){
     placed=true;acknowledgedState=block.stateId;
     if(!dispatch.active||!dispatch.dispatched||block.name!==dispatch.placedName)return;
-    authority.noteConfirmedPlacement(bot,block,witness);
+    authority.noteConfirmedPlacement(bot,block,{...witness,restore:dispatch.restores?.[key(block.position)]});
     for(const cell of dispatch.placedCells?.slice(1)||[]){
      const companion=bot.blockAt(cell),a=block.getProperties?.()||{},b=companion?.getProperties?.()||{};
      const pair=/_bed$/.test(block.name)?require('./build-blocks').bedPairMatches(block,companion):/_door$/.test(block.name)&&a.half==='lower'&&b.half==='upper'&&['facing','hinge','open','powered'].every(k=>a[k]===b[k]);
-     if(companion?.name===block.name&&pair&&pairUpdates.get(key(cell))===companion.stateId)authority.noteConfirmedPlacement(bot,companion,witness);
+     if(companion?.name===block.name&&pair&&pairUpdates.get(key(cell))===companion.stateId)authority.noteConfirmedPlacement(bot,companion,{...witness,restore:dispatch.restores?.[key(companion.position)]});
     }
    }};
    bot._client?.on('block_change',ack);bot.on?.('blockPlaced',placement);bot.on?.('blockUpdate',pairUpdate);
-   try{const result=await dispatches.run(dispatch,()=>original.apply(this,args));if(dispatch.error)throw dispatch.error;succeeded=true;return result;}catch(err){throw dispatch.error||err;}
+   try{authority.mutationStarted(bot,operation,cells);const result=await dispatches.run(dispatch,()=>original.apply(this,args));if(dispatch.error)throw dispatch.error;succeeded=true;return result;}catch(err){throw dispatch.error||err;}
    finally{
     dispatch.active=false;
     witness.client?.removeListener('block_change',ack);bot.removeListener?.('blockPlaced',placement);bot.removeListener?.('blockUpdate',pairUpdate);
     const after=bot.blockAt(p);
-    audit({operation,position:{x:p.x,y:p.y,z:p.z},status:succeeded?'returned':'failed',requested_by_bot:true,registered:protectedCell,permission:permit?'validated_build_cell':emergency?'body_intersection_escape':allowed.source==='upstream'?'unregistered_cell':allowed.source,...dispatch.attribution,build_id:permit?.goal.buildId||null,before:{name:before?.name,state_id:before?.stateId},after:{name:after?.name,state_id:after?.stateId},server_update_observed:acknowledgedState!==null,server_state_id:acknowledgedState,own_placement_event:placed,observed_change:acknowledgedState!==null&&acknowledgedState!==before?.stateId});
+    audit({operation,position:{x:p.x,y:p.y,z:p.z},status:succeeded?'returned':'failed',requested_by_bot:true,registered:protectedCell,restoration:allowed.restoration||null,permission:permit?'validated_build_cell':emergency?'body_intersection_escape':allowed.source==='upstream'?'unregistered_cell':allowed.source,...dispatch.attribution,build_id:permit?.goal.buildId||null,before:{name:before?.name,state_id:before?.stateId},after:{name:after?.name,state_id:after?.stateId},server_update_observed:acknowledgedState!==null,server_state_id:acknowledgedState,own_placement_event:placed,observed_change:acknowledgedState!==null&&acknowledgedState!==before?.stateId});
    }
   };
  }
@@ -243,9 +245,9 @@ async function withBuildMutation(bot,task,goal,p,operation,run,{cells,validate}=
 }
 function routeMutatesStructure(bot,move){
  const protectedAt=bot._registeredStructureProtection||(()=>false);
- return (move.toBreak||[]).some(p=>{try{return mutationCells(bot,'dig',new Vec3(p.x,p.y,p.z)).some(q=>protectedAt(q)||!authority.queryMutation(bot,'dig',q).allowed);}catch{return true;}})||(move.toPlace||[]).some(p=>{
+ return (move.toBreak||[]).some(p=>{try{return mutationCells(bot,'dig',new Vec3(p.x,p.y,p.z)).some(q=>!authority.hasMutationAuthority(bot)&&protectedAt(q)||!authority.queryMutation(bot,'dig',q).allowed);}catch{return true;}})||(move.toPlace||[]).some(p=>{
   if(p.useOne)return false; // Door activation, not placement.
-  const q=new Vec3(p.x+(p.dx||0),p.y+(p.dy||0),p.z+(p.dz||0));return protectedAt(q)||!authority.queryMutation(bot,'place',q).allowed;
+  const q=new Vec3(p.x+(p.dx||0),p.y+(p.dy||0),p.z+(p.dz||0));return !authority.hasMutationAuthority(bot)&&protectedAt(q)||!authority.queryMutation(bot,'place',q).allowed;
  });
 }
 module.exports={installStructureMutationGuard,withBuildMutation,withMutationExpectation,routeMutatesStructure,mutationCells};

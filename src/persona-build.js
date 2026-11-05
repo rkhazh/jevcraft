@@ -72,6 +72,7 @@ function prepareBuild(bot,spec,principal,{enabled=false}={}) {
   return {...base,buildOwned:structuredClone(entry.buildOwned||{}),continueBuild:{id:entry.id,mode:spec.mode}};
  }
  if(!['fresh','edit'].includes(spec.mode))fail('unsupported mode');
+ if(spec.mode==='edit'&&require('./mutation-authority').pendingRestorations(bot).some(r=>r.restore.project_id===entry?.id))fail('restore pending temporary project placements before editing');
  if(spec.mode==='edit'&&entry?.buildAccess)fail('finish pending local access restoration before editing');
  const design=validate(spec.schematic,bot.registry);
  if(spec.mode==='fresh'){
