@@ -160,6 +160,20 @@ class LaunchTests(unittest.TestCase):
 
 
 class PlannerProcessTests(unittest.TestCase):
+    def test_virtualenv_interpreter_keeps_its_installed_packages(self):
+        import subprocess
+        import sys
+        import venv
+        from tolik.planner import Planner as RealPlanner
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);environment=root/'environment'
+            venv.EnvBuilder(with_pip=False,symlinks=True).create(environment)
+            packages=environment/'lib'/('python'+str(sys.version_info.major)+'.'+str(sys.version_info.minor))/'site-packages'
+            (packages/'tolik_venv_probe.py').write_text('VALUE=42\n')
+            p=RealPlanner(environment/'bin/python',root,root/'runs')
+            result=subprocess.run([p.python,'-c','import tolik_venv_probe; print(tolik_venv_probe.VALUE)'],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.strip(),'42')
     def test_timeout_terminates_owned_process_group(self):
         from tolik.planner import Planner as RealPlanner
         with tempfile.TemporaryDirectory() as tmp:

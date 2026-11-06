@@ -68,7 +68,7 @@ def migrate(args):
     if assets.exists():shutil.copytree(assets,HOME/'vision-assets')
     memory=Memory(HOME/'memory.sqlite')
     imported=memory.import_lab(character/'episodes.sqlite');memory.close()
-    config=dict(hermes_python=str(Path(args.hermes_python).resolve()),hermes_home=str(HOME/'hermes'),
+    config=dict(hermes_python=os.path.abspath(os.path.expanduser(args.hermes_python)),hermes_home=str(HOME/'hermes'),
         model='gpt-6.1-terra',state_dir=str(HOME/'body-state'),authority=str(HOME/'mutation-authority.json'),
         vision=assets.exists(),asset_root=str(HOME/'vision-assets'),voice=False,voice_send=False,voice_players=[],memory=str(HOME/'memory.sqlite'))
     write_json(HOME/'config.json',config)
