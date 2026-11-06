@@ -1,5 +1,8 @@
 # Tolik: native JevCraft and Luna
 
+Historical update: the later [directed-control change](tolik-directed-control-2026-11-07.md)
+disables autonomy and restricts free-text requests by default after the Luna test.
+
 Standalone Tolik now opts into `native_capabilities: true`, with Hermes using
 `gpt-6-luna` through the existing OpenAI subscription connection. JevCraft's
 tactical model remains `typesafe/jev-1.14`. Credentials, world state and Persona

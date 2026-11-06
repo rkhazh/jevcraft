@@ -13,5 +13,6 @@
   "voice_players": [
     "SkipperBot"
   ],
-  "native_capabilities": true
+  "native_capabilities": true,
+  "autonomous": false
 }

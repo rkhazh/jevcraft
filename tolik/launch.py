@@ -41,6 +41,7 @@ def body_environment(config,secrets,run,profile,seconds,attempts):
     env.update(JEV_PERSONA_PROFILE=json.dumps(profile,ensure_ascii=False),
         JEV_PERSONA_VISIT='1',JEV_PERSONA_CRAFT_FROM_INVENTORY='0' if native else '1',JEV_PERSONA_NATIVE='1' if native else '0',
         MC_COMMAND_USERS=','.join(config.get('operators',{})) if native else '',
+        JEV_PERSONA_AUTONOMY='1' if config.get('autonomous',False) else '0',
         JEV_PERSONA_ITEMS=ITEMS,JEV_PERSONA_DECISION_MODE='continuing',
         JEV_COMMUNITY_CHARACTER='TolikScheben',JEV_COMMUNITY_SECONDS=str(seconds),
         JEV_COMMUNITY_HTTP_LIMIT=str(attempts),JEV_COMMUNITY_RUN_DIRECTORY=str(run),
@@ -72,7 +73,7 @@ def migrate(args):
     memory=Memory(HOME/'memory.sqlite')
     imported=memory.import_lab(character/'episodes.sqlite');memory.close()
     config=dict(hermes_python=os.path.abspath(os.path.expanduser(args.hermes_python)),hermes_home=str(HOME/'hermes'),
-        model='gpt-6-luna',native_capabilities=True,state_dir=str(HOME/'body-state'),authority=str(HOME/'mutation-authority.json'),
+        model='gpt-6-luna',native_capabilities=True,autonomous=False,state_dir=str(HOME/'body-state'),authority=str(HOME/'mutation-authority.json'),
         vision=assets.exists(),asset_root=str(HOME/'vision-assets'),voice=False,voice_send=False,voice_players=[],memory=str(HOME/'memory.sqlite'))
     write_json(HOME/'config.json',config)
     print(json.dumps({'configured':True,'historical_records_imported':imported,'config':str(HOME/'config.json')}))
@@ -160,7 +161,7 @@ def run(args):
             from .voice_service import VoiceService
             voice=VoiceService(body.url,secrets['JEV_PERSONA_TOKEN'],config)
         runtime=Runtime(body,planner,memory,profile,max_calls=args.max_calls,voice=voice,
-            operators=config.get('operators',{}),
+            operators=config.get('operators',{}),directed=not config.get('autonomous',False),
             vision_directory=run_dir/'vision' if config.get('vision',True) else None)
         status_data.update(status='running',session_id=state['session_id'],body_pid=body_process.pid)
         write_json(HOME/'status.json',status_data)

@@ -220,8 +220,11 @@ class LaunchTests(unittest.TestCase):
         secrets={'MC_LOGIN_PASSWORD':'test','JEV_PERSONA_TOKEN':'t'*40,'OPENROUTER_API_KEY':'test'}
         env=body_environment(cfg,secrets,Path('/tmp/run'),{},0,0)
         self.assertEqual(env['JEV_PERSONA_NATIVE'],'1')
+        self.assertEqual(env['JEV_PERSONA_AUTONOMY'],'0')
         self.assertEqual(env['JEV_COMMUNITY_SECONDS'],'0')
         self.assertEqual(env['JEV_COMMUNITY_HTTP_LIMIT'],'0')
+        cfg['autonomous']=True
+        self.assertEqual(body_environment(cfg,secrets,Path('/tmp/run'),{},0,0)['JEV_PERSONA_AUTONOMY'],'1')
 
 
 class PlannerProcessTests(unittest.TestCase):

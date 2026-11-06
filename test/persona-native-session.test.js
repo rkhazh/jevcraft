@@ -10,7 +10,7 @@ test('native intake shares Jev work, preserves recipients, handles feedback and 
  Object.assign(bot,{loadPlugin(plugin){plugins.push(String(plugin));},username:'Tolik',version:'26.1',health:5,food:20,isAlive:true,
   game:{dimension:'the_nether',gameMode:'survival'},time:{timeOfDay:1000},entities:{},
   players:{Alex:{uuid:'00000000-0000-4000-8000-000000000001',username:'Alex',entity:{position:{x:0,y:64,z:0}}}},
-  entity:{position:{x:0,y:64,z:0}},inventory:{items:()=>[]},registry:{itemsByName:{diamond:{id:1}}},
+  entity:{position:{x:0,y:64,z:0}},inventory:{items:()=>[]},registry:require('minecraft-data')('1.21.11'),
   pathfinder:{setGoal(){}},clearControlStates(){},stopDigging(){},deactivateItem(){},chat(){},
   quit(){bot.emit('end','quit');},waitForChunksToLoad:async()=>{},swingArm(){}});
  const original=Module._load,env={...process.env},dir=mkdtempSync(join(tmpdir(),'tolik-native-'));let session;
@@ -21,7 +21,10 @@ test('native intake shares Jev work, preserves recipients, handles feedback and 
   if(name==='./slow-calls')return {install(){}};
   if(name==='./objectives'&&parent.filename.endsWith('/session.js'))return {...original.call(this,name,parent,isMain),interpret:async(_client,request,from)=>{
    interpretations++;if(mode==='delayed')await new Promise(r=>release=r);
+   if(mode==='error')throw new Error('Interpretation service unavailable');
    return mode==='clarify'?{kind:'clarify',message:'Which fortress?',clarification:{}}:
+    mode==='other'?{kind:'other',message:'No supported task in that request'}:
+    mode==='unworkable'?{kind:'obtain',request,from,item:'bedrock',count:1,deliver:false}:
     mode==='operator_command'?{kind:'operator_command'}:{kind:'obtain',request,from,item:'diamond',count:128,deliver:true};
   }};
   if(name==='./work'&&parent.filename.endsWith('/session.js'))return {
@@ -45,10 +48,15 @@ test('native intake shares Jev work, preserves recipients, handles feedback and 
   mode='clarify';p=propose('Find it');await api.submit(p);await delay(30);
   assert.ok(api.events(0).events.some(e=>e.type==='native_feedback'&&e.message==='Which fortress?'));
   assert.equal(api.snapshot().active_goal_id,null);
+  assert.equal(api.snapshot().last_result.status,'blocked');assert.equal(api.snapshot().last_result.reason,'Which fortress?');
+  for(const [failure,reason] of [['other',/No supported task/],['unworkable',/No supported survival acquisition/],['error',/Interpretation service unavailable/]]){
+   mode=failure;p=propose('Do the requested task');await api.submit(p);await delay(30);
+   assert.equal(api.snapshot().last_result.status,'blocked',failure);assert.match(api.snapshot().last_result.reason,reason);
+  }
   mode='delayed';p=propose('Find diamonds');assert.equal((await api.submit(p)).status,'accepted');await delay(20);
   await api.cancel(p.goal_id);release();await delay(30);assert.equal(starts.length,1,'late interpretation cannot revive cancelled work');
   mode='operator_command';p=propose('Run /op Alex');await api.submit(p);await delay(30);
   assert.ok(api.events(0).events.some(e=>e.type==='native_feedback'&&/fresh.*player/i.test(e.message)));
-  assert.equal(starts.length,1);assert.equal(interpretations,3,'literal slash requests need no model interpretation');
+  assert.equal(starts.length,1);assert.equal(interpretations,6,'literal slash requests need no model interpretation');
  }finally{session?.shutdown();await session?.closed;Module._load=original;process.env=env;rmSync(dir,{recursive:true,force:true});}
 });

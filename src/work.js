@@ -1274,6 +1274,9 @@ async function upkeepStep(bot, task, goal, save, client, onStep = () => {}) {
 // asked at upkeep, and offered as work while a rest is waited out
 // (holdForRest, note 675), where "carry on" had held it five minutes.
 async function upkeepOffers(bot, task, goal, save) {
+  // Directed work obtains its actual prerequisites through its own work steps.
+  // Spare supplies and future expeditions must not interrupt a player request.
+  if(goal?.personaHold===true)return {options:{},budget:null};
   const { blockStock, blockReserve } = require('./inventory-tidy');
   const BLOCK_RESERVE = blockReserve(bot);
   const options = {};

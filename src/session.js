@@ -51,12 +51,14 @@ function unworkable(bot, spec) {
 }
 
 function createSession(config, client, { stateDirectory = path.join(__dirname, '..', '.bot-state'), recorder,
-  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false, personaLocalMove=false, personaVisit=false, personaCraftFromInventory=false, personaProfile=null, mutationPolicy=null, personaNative=false } = {}) {
+  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false, personaLocalMove=false, personaVisit=false, personaCraftFromInventory=false, personaProfile=null, mutationPolicy=null, personaNative=false, personaAutonomous=true } = {}) {
   // Invalid configured identity fails before creating a connection. The
   // optional local profile does not delay reflexes on an HTTP handshake.
   if(personaProfile!==null&&!require('./persona-context').validProfile(personaProfile))throw new Error('Invalid configured persona profile');
   const externalPersona = process.env.JEV_PERSONA_MODE === '1';
   const nativeCapabilities = externalPersona && personaNative === true;
+  const directedPersona = externalPersona && personaAutonomous !== true;
+  const holdIdle = externalPersona && (!nativeCapabilities || directedPersona);
   const identity = `${config.host}-${config.port}-${config.username}`.replace(/[^a-zA-Z0-9_-]/g, '_');
   const mutationWorldId=process.env.MC_WORLD_ID||identity;
   if(mutationPolicy!==null){
@@ -300,7 +302,8 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
 
   function launch(goal) {
-    if (ended || (externalPersona && !(nativeCapabilities&&goal.dream) && (!goal.personaGoalId || !persona?.valid(goal.personaGoalId)))) return;
+    if (ended || (externalPersona && !(nativeCapabilities&&!directedPersona&&goal.dream) && (!goal.personaGoalId || !persona?.valid(goal.personaGoalId)))) return;
+    if(directedPersona)goal.personaHold=true;
     world.hydrate(goal);
     memory.bind(goal);
     goal.memoryContext = memory.context(goal.from);
@@ -401,7 +404,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // chooses the milestone from what code enumerates; a failure to choose or
   // an unusable answer falls back to ordinary idling until the cool-down ends.
   async function launchDream(standing) {
-    if (externalPersona&&!nativeCapabilities) return;
+    if (externalPersona&&(!nativeCapabilities||directedPersona)) return;
     launchingDream = true;
     const requestRevision=generation;
     const dreamIdentity=value=>JSON.stringify([value?.dream,value?.setAt,value?.text,value?.paused,value?.clearedAt]);
@@ -451,11 +454,11 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
 
   function launchIdle() {
-    const retained = externalPersona&&!nativeCapabilities ? null : store.read();
-    const standing = externalPersona&&!nativeCapabilities ? null : dreamStore.read();
+    const retained = holdIdle ? null : store.read();
+    const standing = holdIdle ? null : dreamStore.read();
     if (standing?.dream && !launchingDream && shouldLaunchDream(standing, retained, { ready: readyForDream(), resting: isSetAside(survival, 'dream_launch', standing.dream) })) { launchDream(standing); return; }
-    const goal = { ...(externalPersona ? {} : idleStore.read() || {}), version: 1, kind: 'survive', personaHold: externalPersona&&!nativeCapabilities, ...(externalPersona&&!nativeCapabilities?{step:{action:'persona_hold'}}:{}),
-      request: externalPersona&&!nativeCapabilities ? 'Stay nearby between admitted persona goals; react to survival needs without optional resource gathering or exploration' : 'Stay alive and prepare supplies between player requests',
+    const goal = { ...(externalPersona ? {} : idleStore.read() || {}), version: 1, kind: 'survive', personaHold: holdIdle, ...(holdIdle?{step:{action:'persona_hold'}}:{}),
+      request: holdIdle ? 'Stay nearby between admitted persona goals; react to survival needs without optional resource gathering or exploration' : 'Stay alive and prepare supplies between player requests',
       retainedRequest: retained?.request, blueprint: retained?.blueprint, survival: survival.state,
       // A dream set aside is not chased by the idle loop either.
       dream: standing?.dream && !standing.satisfiedAt && !standing.paused ? standing.dream : undefined,
@@ -489,7 +492,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
 
   async function resume(revision = generation, options, personaSpec=null) {
-    if (externalPersona&&!personaSpec&&!commandOnly) return;
+    if (externalPersona&&!personaSpec) return;
     if (active?.idle) await stop('interrupted');
     // The dream is what the bot does with nobody's work waiting. A player's
     // stopped or replaced request under it comes first; the dream picks up
@@ -508,7 +511,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     delete saved.waitingOn;
     if (saved.kind === 'build' && !saved.design) saved.designAttempts = 0;
     if (saved !== current) bot.chat(`Back to your earlier task: ${saved.request}.`);
-    if(personaSpec){Object.assign(saved,nativeMetadata(personaSpec));delete saved.personaCraftPolicy;delete saved.personaCraftContinuation;delete saved.personaHold;delete saved.navigationOnly;}
+    if(personaSpec){delete saved.personaCraftPolicy;delete saved.personaCraftContinuation;delete saved.personaHold;delete saved.navigationOnly;Object.assign(saved,nativeMetadata(personaSpec));}
     launch(saved);
   }
   // The flight recording: what the bot sees and decides, for the audits.
@@ -539,15 +542,15 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }, 500);
 
   function nativeMetadata(spec){
-    return {personaGoalId:spec.personaGoalId,personaSessionId:spec.personaSessionId,personaId:spec.personaId,personaWorldId:spec.personaWorldId,nativeCapabilities:true};
+    return {personaGoalId:spec.personaGoalId,personaSessionId:spec.personaSessionId,personaId:spec.personaId,personaWorldId:spec.personaWorldId,nativeCapabilities:true,...(directedPersona?{personaHold:true}:{})};
   }
   async function startNativeRequest(spec){
     try {
-      await handlePlayerRequest(null,spec);
+      const outcome=await handlePlayerRequest(null,spec);
       if(persona.valid(spec.personaGoalId)&&active?.goal.personaGoalId!==spec.personaGoalId)
-        persona.finish(spec.personaGoalId,'complete_unverified',{...spec,kind:'native',status:'complete_unverified'});
+        persona.finish(spec.personaGoalId,outcome?.status||'complete_unverified',{...spec,kind:'native',status:outcome?.status||'complete_unverified',lastError:outcome?.reason});
     } catch(error) {
-      if(persona.valid(spec.personaGoalId))persona.finish(spec.personaGoalId,'failed',{...spec,lastError:String(error.message).slice(0,400)});
+      if(persona.valid(spec.personaGoalId))persona.finish(spec.personaGoalId,'blocked',{...spec,lastError:String(error.message).slice(0,400)});
     }
   }
 
@@ -556,12 +559,13 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     const player = Object.values(bot.players).find(p => p.uuid === data?.sender);
     if (!personaSpec&&(!player || player.username === bot.username || typeof data?.plainMessage !== 'string')) return;
     const from = personaSpec ? (personaSpec.requester||personaSpec.from) : player.username;
-    let request = personaSpec ? `${bot.username} ${personaSpec.request}` : data.plainMessage;
+    let request = personaSpec ? `${bot.username} ${directedPersona?personaSpec.request.trim().toLowerCase():personaSpec.request}` : data.plainMessage;
     if (externalPersona&&!personaSpec&&!commandOnly) return;
     const respond=message=>personaSpec||commandOnly?persona.emit({type:'native_feedback',goal_id:personaSpec?.personaGoalId||null,message:String(message).slice(0,4000),verified:false}):bot.chat(message);
+    const blocked=(message,reason=message)=>{respond(message);return {status:'blocked',reason:String(reason).slice(0,400)};};
     let literal;
     try { literal = requestedCommand(request, bot.username); }
-    catch (err) { console.error(err); respond('I could not use that command. Please check what you asked me to do.'); return; }
+    catch (err) { console.error(err); return blocked('I could not use that command. Please check what you asked me to do.',err.message); }
     let address = parseAddress(request, bot.username);
     // Acknowledgements from other bots must never start new work. New goals
     // require an explicit name; short controls remain convenient when unprefixed.
@@ -599,12 +603,13 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       respond('Stopped. I saved our progress. Say "Jev resume" to keep going.');
       return;
     }
-    if (!ready) { respond('Still loading the world; please repeat the request in a moment. Stop is available now.'); return; }
+    if (!ready) return blocked('Still loading the world; please repeat the request in a moment. Stop is available now.');
     // A literal status request reads local state immediately, even while a
     // previous natural-language request is waiting for a model response.
     if (/^status( please)?[.!?]?$/i.test(normalized)) {
       respond(statusMessage(bot, active, store.read())); return;
     }
+    if(directedPersona&&personaSpec&&normalized==='resume')return resume(generation,undefined,personaSpec);
     // Acknowledge instantly. Everything below can wait on the model, and a
     // motionless bot reads as "it did not hear me" rather than "it is thinking".
     bot.swingArm?.('right');
@@ -637,9 +642,10 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
           clarification: spec.clarification, interpretation: spec.interpretation, itemResolution: spec.itemResolution,
           discoveryResolution: spec.discoveryResolution, buildContinuation: spec.buildContinuation, usage: spec.usage, latencyMs: spec.latencyMs });
       }
-      if (!spec || revision !== generation || (personaSpec&&!persona.valid(personaSpec.personaGoalId))) return;
+      if (revision !== generation || (personaSpec&&!persona.valid(personaSpec.personaGoalId))) return;
+      if(!spec)return blocked('The native interpreter returned no task.');
       if (spec.kind === 'operator_command') {
-        if(personaSpec){respond('Server commands require a fresh authorized player chat packet; a model request cannot impersonate one.');return;}
+        if(personaSpec)return blocked('Server commands require a fresh authorized player chat packet; a model request cannot impersonate one.');
         const allowed = (process.env.MC_COMMAND_USERS || '').split(',').map(name => name.trim().toLowerCase());
         if (!allowed.includes(from.toLowerCase())) { respond(`${from} is not enabled for Jev's operator commands`); return; }
         const resolution = literal ? { command: literal } : await classifyCommand(requestClient, bot, request, from);
@@ -669,8 +675,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         return;
       }
       if (spec.kind === 'other') {
-        respond('Ask for items or a full set, a biome or creature to find, someone to follow, or a structure to build.');
-        return;
+        return blocked(spec.message||'Ask for items or a full set, a biome or creature to find, someone to follow, or a structure to build.');
       }
       if (spec.kind === 'memory') {
         respond(memory.handle(spec, { world: world.known }));
@@ -685,7 +690,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         if (operation === 'set_custom') {
           // The text routes as a request; a survival route may still not exist for it.
           const impossible = unworkable(bot, spec.dream.probe);
-          if (impossible) { respond(`I can't keep that as a dream. ${friendlyProblem(impossible)}`); return; }
+          if (impossible) return blocked(`I can't keep that as a dream. ${friendlyProblem(impossible)}`,impossible.message);
         }
         if (operation === 'query') {
           respond(dreamReport(standing, store.read()));
@@ -733,7 +738,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         const reason = spec.clarification?.reason;
         clarifying.set(from, { request: address.text, options: spec.clarification?.options, until: Date.now() + CLARIFY_MS,
           confirm: ['uncertain_interaction', 'dream_unsure'].includes(reason), which: ['no_item', 'no_discovery_target', 'ambiguous_item', 'incomplete_bundle'].includes(reason) });
-        respond(spec.message); return;
+        return blocked(spec.message||spec.clarification?.reason||'The native interpreter needs clarification.');
       }
       if (spec.kind === 'stop') { invalidateRequests(); await stop(); respond('Stopped.'); return; }
       if (spec.kind === 'resume') {
@@ -746,7 +751,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       // work that can be done. "Get me bedrock" stopped a build, then was
       // parked as impossible, and the build had to be dug out with resume.
       const impossible = unworkable(bot, spec);
-      if (impossible) { respond(`${friendlyProblem(impossible)}${active && !active.idle ? " I'll carry on with what I was doing." : ''}`); return; }
+      if (impossible) return blocked(`${friendlyProblem(impossible)}${active && !active.idle ? " I'll carry on with what I was doing." : ''}`,impossible.message);
       await stop('replaced');
       if (revision !== generation || ended) return;
       const goal = { ...spec, ...(personaSpec?nativeMetadata(personaSpec):{}), ledgerRun: run.id, version: 1, status: 'pending', createdAt: new Date().toISOString(),
@@ -770,7 +775,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         spec.kind === 'win' ? "Let's beat the dragon! I'll gather supplies and take it one step at a time." :
         "I'll get a Nether portal working, then go through to check it.");
       launch(goal); launched = true;
-    }).catch(err => { console.error(err); if (!ended && revision === generation) respond(intakeProblem(err)); }).finally(() => { if (!launched) ledger.fold(run.id); pendingRequests--; });
+    }).catch(err => { console.error(err); if (!ended && revision === generation) return blocked(intakeProblem(err),err.message); }).finally(() => { if (!launched) ledger.fold(run.id); pendingRequests--; });
     return pending;
   }
   bot._client.on('playerChat', data => {
@@ -918,7 +923,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     const safeToLook=()=>ready&&!ended&&(!active||active.idle)&&(nativeCapabilities||(bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false))&&!['survival','vitals'].includes(bot._turn?.holder);
     bot._personaVisitResolve=(id,principal)=>visitApi.resolveDestination(bot,id,{known:world.known,principal});
     persona = require('./persona-admission').createPersona({
-      nativeCapabilities,
+      nativeCapabilities,personaAutonomous:!directedPersona,
       decisionMode:process.env.JEV_PERSONA_DECISION_MODE==='continuing'?'continuing':'legacy',
       reaction:require('./persona-reaction').createPersonaReaction({client:contextual(()=>active?.goal),getPersona:()=>ended?null:persona,getGoal:()=>active?.goal,canObserve:()=>safeToLook()&&!visionCapturePending&&Date.now()-lastVisionCapture>=5000}),
       rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,movementAffordances:()=>require('./persona-move').standingAffordances(bot,{enabled:personaLocalMove&&ready&&!ended}),checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove,nativeCapabilities}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,

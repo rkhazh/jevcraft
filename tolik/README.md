@@ -52,24 +52,40 @@ on `mc.agicraft.ru`, Minecraft 1.21.11. It does not register or warp the account
 
 ## Native capabilities and human instructions
 
-The standalone configuration enables `native_capabilities: true`. Hermes can
-send a native gameplay request into the same interpreter and work scheduler as
-ordinary JevCraft. This covers all native request kinds: items and item lists,
-crafting and smelting, delivery, discovery, travel, building, following, portals,
-Nether/End progression, memories, dreams, status, stop and resume. Native execution
-can use containers, buckets, combat, boats and trading when its plan calls for them.
-Hermes can also submit its own construction schematics and exact block edits.
+The standalone configuration enables `native_capabilities: true` and defaults
+to `autonomous: false`. Hermes sends structured obtain, craft, move, visit,
+come, follow, build and exact-edit goals to JevCraft. Native mechanics can gather
+the resources required for an assigned task. Digging and building remain available
+where the server allows them; there is no house-only boundary.
+
+Directed mode waits between requests. It disables optional stockpiling,
+exploration, village visits and dream execution, including during another task.
+Immediate survival reactions remain enabled. Old memory does not authorize a
+new task after reconnect. Every model action must reference the latest verified
+operator message in the current session. Simple Russian/English stop, follow
+and come commands dispatch directly without waiting for Hermes inference.
+
+Free-text native requests are limited to exact `stop`, `status` and `resume`
+controls. This avoids interpreting a compound stop/build request as just stop.
+Two failed or blocked attempts pause the current request until a new operator
+message. Action-associated speech is sent only after the body accepts the action;
+acceptance still does not prove completion.
+
+Setting `autonomous: true` explicitly restores native idle preparation, dreams
+and the free-text interpreter. That path includes item lists, delivery, discovery,
+portals and Nether/End progression in addition to structured gameplay. The direct
+operator controls and failure pause above are specific to directed mode.
 
 Removed in this mode: local land grants and packet mutation guards, the item
 allowlist, Overworld-only and low-health admission, carried-inventory-only
 crafting, 16/96-block travel limits, 64-cell edit limits, two-minute goal leases,
 one-minute visits, smaller persona construction caps and mandatory ten-minute /
-60-call run caps. Native idle preparation is enabled. Cancellation followed by
+60-call run caps. Cancellation followed by
 inspection or replacement work executes in order; ordinary inventory changes
 no longer discard a new plan. New messages still supersede stale inference.
 
 Set `operators` in local config to a player-name → server-UUID mapping. Matching
-in-game requests take priority over Tolik's own plans. Native server commands
+in-game requests supply the current task. Native server commands
 require a fresh addressed literal command from a configured operator's actual
 player-chat packet, and retain JevCraft's one-shot command authorization. The
 model cannot fabricate that packet; formatted server messages cannot authorize it.
@@ -148,4 +164,7 @@ are documented separately from test claims.
 The [recorded session analysis](../docs/tolik-session-analysis-2026-11-07.md)
 separates verified actions, wrapper failures and native survival behavior.
 The [native-mode update](../docs/tolik-native-capabilities-2026-11-07.md) records
-validation and the Luna switch.
+validation and the Luna switch. The later
+[directed-control update](../docs/tolik-directed-control-2026-11-07.md) documents
+the restored restrictions. Detailed session analysis remains local in ignored
+`.tolik/reports/tolik-luna-session-analysis-2026-11-07.md`.

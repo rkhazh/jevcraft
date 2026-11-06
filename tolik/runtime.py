@@ -4,13 +4,14 @@ import json
 import time
 import unicodedata
 from uuid import uuid4
+from .control import DirectedControl
 
 
 TERMINAL={'complete','completed','failed','blocked','cancelled','expired','complete_unverified'}
 
 
 class Runtime:
-    def __init__(self,body,planner,memory,profile,*,clock=time.time,max_calls=24,voice=None,vision_directory=None,operators=None):
+    def __init__(self,body,planner,memory,profile,*,clock=time.time,max_calls=24,voice=None,vision_directory=None,operators=None,directed=False):
         self.body,self.planner,self.memory,self.profile=body,planner,memory,profile
         self.clock,self.max_calls,self.voice=clock,max_calls,voice
         self.session=None;self.cursor=0;self.revision=0;self.messages=[]
@@ -21,6 +22,7 @@ class Runtime:
         self.pending_capture=None
         self.reconcile_at=0
         self.operators=dict(operators or {})
+        self.directed=directed;self.control=DirectedControl();self.pending_direct=None
 
     def operator_instruction(self,event):
         expected=self.operators.get(event.get('user'))
@@ -41,12 +43,16 @@ class Runtime:
             if self.session:self.planner.close()
             self.session=state['session_id'];self.cursor=0;self.revision+=1
             self.inflight=None;self.messages=[];self.uncertain=None;self.owned_goal=None;self.dirty=True
+            self.control=DirectedControl();self.pending_direct=None
         if self.voice:
             for event in self.voice.poll(state):
                 if event.get('session_id')!=self.session:continue
                 event=dict(event,operator_instruction=self.operator_instruction(event))
                 self.memory.record(dict(event,world_id=state['world_id']))
                 self.messages.append(event);self.revision+=1;self.dirty=True
+                if self.directed and event['operator_instruction']:
+                    command=self.control.observe(event)
+                    if command is not None:self.pending_direct=(command,event['event_id'])
             for report in self.voice.drain_reports():self.record('voice_report',receipt=report)
         for _ in range(16):
             packet=self.body.events(self.cursor)
@@ -63,14 +69,33 @@ class Runtime:
                 if event.get('type') in {'chat','voice'} and event.get('user')!=self.profile['persona_id']:
                     self.messages.append(event);self.messages=self.messages[-64:]
                     self.revision+=1;self.dirty=True
+                    if self.directed and event.get('operator_instruction'):
+                        command=self.control.observe(event)
+                        if command is not None:self.pending_direct=(command,event['event_id'])
                 if event.get('type')=='native_feedback':
                     self.feedback.append({'native':event.get('message')});self.dirty=True
                 if event.get('status') in TERMINAL:
+                    if self.directed:self.control.result(event)
                     self.dirty=True
                     if self.uncertain and event.get('goal_id')==self.uncertain['goal_id']:self.uncertain=None
                     if event.get('goal_id')==self.owned_goal:self.owned_goal=None
             self.cursor=packet.get('cursor',self.cursor)
             if not packet.get('has_more'):break
+        if self.directed and self.pending_direct is not None:
+            spec,instruction_id=self.pending_direct
+            if instruction_id!=(self.control.current or {}).get('event_id') and spec.get('request')!='stop':
+                self.pending_direct=None
+                self.record('plan_withheld',reason='newer_operator_message_before_direct_action')
+        if self.directed and self.pending_direct is not None:
+            spec,instruction_id=self.pending_direct;self.pending_direct=None
+            self.planner.close();self.inflight=None
+            if self.uncertain:
+                self.record('cancel',receipt=self.body.cancel(self.uncertain['goal_id']))
+                self.uncertain=None;self.owned_goal=None
+            fresh=self.body.snapshot()
+            self.apply(dict(intent='Direct operator control',instruction_id=instruction_id,
+                            say=None,goal=spec,inspect=None,cancel=True,wait_seconds=15),fresh,fresh,direct=True)
+            state=self.body.snapshot();self.last_snapshot=state;self.dirty=True
         if self.uncertain and (state.get('active_goal_id')==self.uncertain['goal_id'] or (self.uncertain['expires_at'] is not None and self.clock()>=self.uncertain['expires_at'])):
             self.uncertain=None;self.dirty=True
         if self.uncertain and self.uncertain['expires_at'] is None and self.clock()>=self.reconcile_at:
@@ -83,6 +108,7 @@ class Runtime:
                 self.record('goal_reconciled',goal_id=self.uncertain['goal_id'],receipt=receipt)
                 self.uncertain=None;self.dirty=True
                 if receipt.get('status')!='accepted':
+                    if self.directed:self.control.result({'goal_id':self.owned_goal,'status':'rejected'})
                     self.owned_goal=None;self.feedback.append({'admission':receipt})
             except Exception as error:
                 self.record('goal_reconcile_pending',error=type(error).__name__)
@@ -101,10 +127,11 @@ class Runtime:
                 else:
                     self.apply(result,original['state'],state)
                     self.messages=[]
-        if not self.inflight and not self.uncertain and (self.max_calls==0 or self.calls<self.max_calls) and (self.dirty or self.clock()>=self.next_plan):
+        if not self.inflight and not self.uncertain and (self.max_calls==0 or self.calls<self.max_calls) and (self.dirty or self.clock()>=self.next_plan and (not self.directed or not self.control.waiting or state.get('active_goal_id'))):
             context=dict(profile=self.profile,observation=state,messages=copy.deepcopy(self.messages),
                 memory=self.memory.context(state['world_id'],18),feedback=self.feedback,
-                inspection=self.inspection,verified_results_only=True,operator_players=list(self.operators))
+                inspection=self.inspection,verified_results_only=True,operator_players=list(self.operators),
+                control=self.control.context() if self.directed else {'mode':'autonomous'})
             if self.vision_directory:
                 try:
                     from .vision import validate_capture,save_capture
@@ -119,23 +146,26 @@ class Runtime:
             self.inflight=dict(session=self.session,revision=self.revision,state=copy.deepcopy(state))
             self.record('planner_started',call=self.calls,message_ids=[m['event_id'] for m in self.messages])
 
-    def apply(self,plan,original,current):
+    def apply(self,plan,original,current,*,direct=False):
         self.feedback=[];self.dirty=False
-        if not isinstance(plan,dict) or set(plan)-{'intent','say','goal','inspect','wait_seconds','cancel'}:
+        if not isinstance(plan,dict) or set(plan)-{'intent','say','goal','inspect','wait_seconds','cancel','instruction_id'}:
             self.feedback=[{'error':'invalid_plan_shape'}];self.next_plan=self.clock()+10;return
         delay=plan.get('wait_seconds',15)
         if type(delay) not in (int,float) or not 1<=delay<=60:delay=15
         self.next_plan=self.clock()+delay
+        if self.directed and not direct:
+            rejection=self.control.check(plan)
+            if rejection:
+                self.record('plan_withheld',reason=rejection)
+                self.feedback=[{'error':rejection}]
+                if rejection=='use_structured_goal' or rejection=='current_operator_instruction_required' and self.control.current:
+                    self.control.failures+=1
+                self.dirty=not self.control.waiting
+                return
         speech=plan.get('say')
-        if speech is not None:
-            valid=isinstance(speech,str) and 0<len(speech)<=240 and not speech.lstrip().startswith(('/','!','@')) and not any(unicodedata.category(c) in {'Cc','Cf'} for c in speech)
-            if valid:
-                receipt=self.body.chat(speech,session_id=self.session)
-                self.record('speech',text=speech,receipt=receipt)
-                if self.voice and receipt.get('status') in {'sent','accepted'}:
-                    try:self.voice.speak(speech)
-                    except Exception as error:self.record('voice_error',error=type(error).__name__)
-            else:self.feedback.append({'error':'invalid_speech'})
+        action=plan.get('goal') is not None or plan.get('cancel') is True
+        defer_speech=self.directed and action
+        if not defer_speech:self.speak(speech)
         native=current.get('native_capabilities',{}).get('enabled') is True
         if plan.get('cancel') is True:
             if self.owned_goal and current.get('active_goal_id')==self.owned_goal:
@@ -152,7 +182,9 @@ class Runtime:
                     self.inspection['frame_metadata']={k:v for k,v in packet.items() if k!='image_base64'}
                 self.record('inspection',result=self.inspection);self.dirty=True
             else:self.feedback.append({'error':'invalid_inspection'})
-        if plan.get('cancel') is True and not native:return
+        if plan.get('cancel') is True and not native:
+            if defer_speech:self.speak(speech)
+            return
         spec=plan.get('goal')
         if native and plan.get('cancel') is True and spec is None:
             spec={'kind':'native','request':'stop','requester':None}
@@ -177,14 +209,28 @@ class Runtime:
         # Save before the network boundary; never assign a new ID after an ambiguous send.
         self.uncertain=proposal;self.owned_goal=proposal['goal_id']
         self.reconcile_at=self.clock()+5
-        self.record('goal_proposed',proposal=proposal,intent=plan.get('intent'))
+        if self.directed:self.control.submitted(proposal['goal_id'],spec,plan.get('instruction_id'))
+        self.record('goal_proposed',proposal=proposal,intent=plan.get('intent'),instruction_id=plan.get('instruction_id'))
         try:receipt=self.body.submit(proposal)
         except Exception as error:
             self.record('goal_uncertain',goal_id=proposal['goal_id'],error=type(error).__name__);return
         self.uncertain=None
         self.record('goal_ack',goal_id=proposal['goal_id'],receipt=receipt)
         if receipt.get('status')!='accepted':
+            if self.directed:self.control.result({'goal_id':proposal['goal_id'],'status':'rejected'})
             self.owned_goal=None;self.feedback.append({'admission':receipt});self.dirty=True
+        elif defer_speech:self.speak(speech)
+
+    def speak(self,speech):
+        if speech is not None:
+            valid=isinstance(speech,str) and 0<len(speech)<=240 and not speech.lstrip().startswith(('/','!','@')) and not any(unicodedata.category(c) in {'Cc','Cf'} for c in speech)
+            if valid:
+                receipt=self.body.chat(speech,session_id=self.session)
+                self.record('speech',text=speech,receipt=receipt)
+                if self.voice and receipt.get('status') in {'sent','accepted'}:
+                    try:self.voice.speak(speech)
+                    except Exception as error:self.record('voice_error',error=type(error).__name__)
+            else:self.feedback.append({'error':'invalid_speech'})
 
     def close(self):
         if self.closed:return
