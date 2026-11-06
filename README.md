@@ -1,5 +1,13 @@
 # jevcraft
 
+## Standalone Tolik fork
+
+This branch adds [Tolik: Hermes + JevCraft](tolik/README.md), using the OpenAI
+subscription provider and the existing Persona Lab character, dated memory,
+chat, bot-eye vision and optional voice transport. Start with the
+[installation and launch instructions](tolik/README.md).
+The original JevCraft project description follows below.
+
 **A Minecraft bot that beat the game with a model that never writes a word.**
 
 On 2026-10-24, from a fresh Survival world on Normal difficulty (no cheats, no commands, no staged items) and an empty inventory, jevcraft killed the Ender Dragon after about 107 hours of play; a second fresh run did it on 2026-10-26 ([the wins](#the-wins)). Every judgement along the way, about 25,700 of them, was made by [Jev](https://typesafe.ai/), a small [System One](https://docs.typesafe.ai/concepts/system-one) model from TypeSafe: a classifier that is given a list of options and returns a probability for each, in about 0.2 seconds. Jev's part of the whole run cost about $4.30.

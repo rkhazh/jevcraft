@@ -95,4 +95,5 @@ npm test
 Tests exercise native gameplay boundaries, the new scheduler, memory import,
 voice transport and vision validation without model or public server calls.
 See `NOTICE.md` for source attribution and `../docs/tolik-hermes-design.md` for
-the architecture. Live observations are documented separately from test claims.
+the architecture. [Live observations and limits](../docs/tolik-hermes-result-2026-11-07.md)
+are documented separately from test claims.

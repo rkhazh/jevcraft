@@ -56,17 +56,22 @@ Files: `tolik/__main__.py`, `tolik/voice.py`, `tolik/svc_client.py`, `tolik/READ
 
 ### Task 4: Live qualification and delivery
 
-- [ ] Run one real bounded Tolik session on current account and standing authority.
-- [ ] Record exact planner/actions/chat, verified results, images, time and usage.
+- [x] Run one real bounded Tolik session on current account and standing authority.
+- [x] Record exact planner/actions/chat, verified results, images, time and usage.
 - [x] Review complete change, resolve important defects with regressions.
-- [ ] Push the source branch to the requested fork; link result and honest limits.
+- [x] Push the source branch to the requested fork; link result and honest limits.
 
 ## Execution record
 
 - Fork created and reference source inspected; builder review: nothing important left.
 - Baseline regression suites passed with loopback access: 492 JevCraft and 481 Persona Lab tests.
-- Final prelaunch qualification: 494 JevCraft and 43 standalone tests passed; Python compilation, shell syntax and diff checks passed.
+- Final prelaunch qualification: 494 JevCraft and 44 standalone tests passed; Python compilation, shell syntax and diff checks passed.
 - Independent runtime review resolved stale plans, voice lifecycle/delivery, actual historical memory import, inspection image delivery, subscription usage accounting and safe owned shutdown. Failed-first regressions cover the fixes.
 - Actual Hermes subscription smoke returned a Russian Tolik response in one API call; credentials remain in the ignored isolated Hermes home.
 - Standalone migration retained 166 dated records, current body/authority state and local vision assets. No NetTyan runtime import.
 - User explicitly chose standalone Tolik in the JevCraft fork.
+
+- Live run 20261106T214147.626737Z: 24 real Hermes responses, 13 sent speech receipts and eight verified movement goals; stopped at its call cap after 267.9 seconds.
+- Initial venv-interpreter launch failure reproduced with a real environment regression and corrected before the successful run.
+- Permission attribution prompt clarified after one unsupported server-protection claim; real text-only recorded replay returned the correct local-scope explanation.
+- Published implementation commits 99e8a50 and eb7a331 to rkhazh/jevcraft:tolik-hermes. See docs/tolik-hermes-result-2026-11-07.md for exact outcomes and limits.

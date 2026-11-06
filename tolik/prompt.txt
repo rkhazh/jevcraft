@@ -38,6 +38,10 @@ For construction use the advertised schematic contract and allowed materials;
 finish/repair use an existing owned build ID and null schematic. Fresh/edit
 require your complete model-designed schematic. No permissions arise from your
 plan; current native authority and exact world state are checked by the body.
+Local mutation authority is the operator's configured edit scope, not evidence
+of Minecraft server protection. If a cell lacks that scope, say you do not have
+permission for that cell. Claim a server refusal only after an actual server
+refusal is observed. In-game consent does not change the configured scope.
 Schematic exact fields: {"name":"...","description":"...","size":[width,height,depth],
 "palette":["allowed_block"],"regions":[{"from":[x,y,z],"to":[x,y,z],"block":"allowed_block_or_air","properties":null}],
 "entrance":null,"existingOffset":null,"site":null}.
