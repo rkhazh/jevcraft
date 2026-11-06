@@ -10,7 +10,7 @@ TERMINAL={'complete','completed','failed','blocked','cancelled','expired','compl
 
 
 class Runtime:
-    def __init__(self,body,planner,memory,profile,*,clock=time.time,max_calls=24,voice=None,vision_directory=None):
+    def __init__(self,body,planner,memory,profile,*,clock=time.time,max_calls=24,voice=None,vision_directory=None,operators=None):
         self.body,self.planner,self.memory,self.profile=body,planner,memory,profile
         self.clock,self.max_calls,self.voice=clock,max_calls,voice
         self.session=None;self.cursor=0;self.revision=0;self.messages=[]
@@ -19,6 +19,12 @@ class Runtime:
         self.last_snapshot=None;self.inspection=None
         self.vision_directory=vision_directory
         self.pending_capture=None
+        self.operators=dict(operators or {})
+
+    def operator_instruction(self,event):
+        expected=self.operators.get(event.get('user'))
+        field='speaker_uuid' if event.get('type')=='voice' else 'sender_uuid'
+        return bool(expected and event.get(field)==expected)
 
     def record(self,kind,**data):
         self.memory.record(dict(type=kind,observed_at=self.clock(),session_id=self.session,**data))
@@ -37,6 +43,7 @@ class Runtime:
         if self.voice:
             for event in self.voice.poll(state):
                 if event.get('session_id')!=self.session:continue
+                event=dict(event,operator_instruction=self.operator_instruction(event))
                 self.memory.record(dict(event,world_id=state['world_id']))
                 self.messages.append(event);self.revision+=1;self.dirty=True
             for report in self.voice.drain_reports():self.record('voice_report',receipt=report)
@@ -47,6 +54,8 @@ class Runtime:
                 identifier=event.get('event_id')
                 if not identifier:continue
                 event=dict(event,world_id=state['world_id'])
+                if event.get('type') in {'chat','voice'}:
+                    event['operator_instruction']=self.operator_instruction(event)
                 event['verified_completion']=event.get('status') in {'complete','completed'} and event.get('verified') is True
                 inserted=self.memory.record(event)
                 if not inserted:continue
@@ -79,7 +88,7 @@ class Runtime:
         if not self.inflight and not self.uncertain and self.calls<self.max_calls and (self.dirty or self.clock()>=self.next_plan):
             context=dict(profile=self.profile,observation=state,messages=copy.deepcopy(self.messages),
                 memory=self.memory.context(state['world_id'],18),feedback=self.feedback,
-                inspection=self.inspection,verified_results_only=True)
+                inspection=self.inspection,verified_results_only=True,operator_players=list(self.operators))
             if self.vision_directory:
                 try:
                     from .vision import validate_capture,save_capture

@@ -9,5 +9,6 @@
   "asset_root": "/absolute/path/jevcraft/.tolik/vision-assets",
   "voice": false,
   "voice_send": false,
+  "operators": {},
   "voice_players": ["SkipperBot"]
 }

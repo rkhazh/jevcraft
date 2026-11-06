@@ -50,6 +50,48 @@ with its manifest, or set `vision` to false. Client assets are not distributed h
 This launcher uses the existing `TolikScheben` account
 on `mc.agicraft.ru`, Minecraft 1.21.11. It does not register or warp the account.
 
+## Editing scope and human instructions
+
+`authority.server-permissions.json` is an opt-in example granting ordinary block
+digging and placement across all world coordinates in each dimension. Point
+`authority` at your selected local policy. Server protections still decide which
+actual actions succeed; a local grant does not bypass Minecraft permissions.
+The current installation uses this broader scope at the user's request, while
+retaining the existing project utility grants. Its previous policy is backed up
+under ignored `.tolik/backups/`.
+
+Set `operators` in local config to a player-name → server-UUID mapping. Incoming
+messages matching both receive `operator_instruction: true` in Hermes' context;
+other players cannot claim that status through message text. Current operator
+gameplay requests and corrections take priority over the character's own plans.
+This does not provide shell, file, credential or administration access.
+
+Remaining limits are technical and configurable separately:
+
+- The persona action planner currently admits Overworld gameplay only.
+- Exact edits: up to 64 changed cells and 64 preserved cells within 16 blocks;
+  actual interaction requires 4.5-block eye reach. Basic full solid blocks and
+  ordinary grass/podzol/mycelium are supported. Stateful mechanisms, fluids,
+  gravity blocks and edits affecting unsupported neighbours can be refused.
+- Registered structures use the existing build/edit workflow. Fresh designs
+  are limited to 1,024 blocks, dimensions 24×16×24, 64 regions and the advertised
+  material palette; materials and usable paths must exist in Survival.
+- Local move targets are within 16 blocks; remembered-place visits within 96.
+  Longer travel requires multiple decisions. Goals have at most 120-second
+  leases; remembered-place visits have 60-second leases.
+- Broad dig/place permission does not grant arbitrary container contents or
+  entity attacks. Item use such as fluid buckets, ignition and complex block
+  interactions remains limited by supported tools.
+- Threat avoidance can interrupt work independently of Hermes. The launcher
+  stops below 10 health. Chat does not guarantee immediate cancellation of
+  native self-defence, and there is no standalone jump command yet.
+- Runs are capped at 10 minutes, 60 Hermes turns and 60 Jev HTTP attempts. One
+  Hermes turn times out after 60 seconds; chat is at most 240 characters.
+- Vision is simplified; community voice remains disabled/unverified by default.
+
+Freshness checks, exact target-state checks and server-observed completion remain
+enabled. Rejected actions are feedback, not proof of successful world changes.
+
 ## Run, inspect, stop
 
 ```sh

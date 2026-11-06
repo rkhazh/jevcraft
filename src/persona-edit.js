@@ -3,6 +3,8 @@
 const {Vec3}=require('vec3'),{exact}=require('./persona-admission');
 const {dependenciesMatch}=require('./persona-actions');
 const AIR=new Set(['air','cave_air','void_air']);
+const SOIL=new Set(['grass_block','podzol','mycelium']);
+const simpleProperties=s=>Object.entries(s.properties).every(([k,v])=>SOIL.has(s.name)&&k==='snowy'&&typeof v==='boolean');
 const key=p=>`${p.x},${p.y},${p.z}`;
 const point=p=>exact(p,['x','y','z'])&&[p.x,p.y,p.z].every(Number.isInteger)&&Math.abs(p.x)<=29999984&&Math.abs(p.z)<=29999984&&p.y>=-64&&p.y<=319;
 const blocked=reason=>Object.assign(Error(reason),{name:'Blocked',personaEditTerminal:true,code:reason==='edit authority denied'?'authority_denied':reason.includes('unsupported')?'capability_unsupported':reason.includes('unloaded')?'temporarily_unavailable':reason.includes('changed')?'target_unresolved':'prerequisite_missing'});
@@ -29,7 +31,7 @@ function verifyEdit(bot,goal){
 function simple(bot,name){
  if(AIR.has(name))return true;
  const block=bot.registry?.blocksByName?.[name];
- return !!block&&block.diggable!==false&&block.boundingBox==='block'&&!block.drops?.some(d=>typeof d==='object')&&!require('./skills').opensOnClick(name)&&!/(sand|gravel|concrete_powder|anvil|bed|door|piston|observer|redstone|water|lava|ice|snow|leaves|log|wood|stem|hyphae|sponge|tnt|coral|sculk|command|structure|jigsaw|spawner|portal|infested|silverfish|bee_nest|beehive)/.test(name)&&!(block.states||[]).length;
+ return !!block&&block.diggable!==false&&block.boundingBox==='block'&&!block.drops?.some(d=>typeof d==='object')&&!require('./skills').opensOnClick(name)&&!/(sand|gravel|concrete_powder|anvil|bed|door|piston|observer|redstone|water|lava|ice|snow|leaves|log|wood|stem|hyphae|sponge|tnt|coral|sculk|command|structure|jigsaw|spawner|portal|infested|silverfish|bee_nest|beehive)/.test(name)&&(!(block.states||[]).length||SOIL.has(name)&&(block.states||[]).every(s=>s.name==='snowy'));
 }
 function assertCurrent(bot,goal,c,authorize){
  if(String(bot.game?.dimension).replace(/^minecraft:/,'')!==goal.dimension)throw blocked('edit dimension changed');
@@ -48,7 +50,7 @@ async function executeEdit(bot,goal,{task,save,authorize=(operation,p)=>require(
  const c=goal.cells.find(c=>!desired(bot.blockAt(new Vec3(c.position.x,c.position.y,c.position.z)),c.desired));
  if(!c)throw blocked('preserve cell changed or edit target unloaded');
  const p=new Vec3(c.position.x,c.position.y,c.position.z),b=assertCurrent(bot,goal,c,authorize);
- if(!simple(bot,b.name)||!simple(bot,c.desired.name)||Object.keys(c.expected.properties).length||Object.keys(c.desired.properties).length)throw blocked('unsupported interactive or stateful edit block');
+ if(!simple(bot,b.name)||!simple(bot,c.desired.name)||!simpleProperties(c.expected)||!simpleProperties(c.desired))throw blocked('unsupported interactive or stateful edit block');
  if(Math.hypot(p.x+.5-bot.entity.position.x,p.y+.5-(bot.entity.position.y+1.62),p.z+.5-bot.entity.position.z)>4.5)throw blocked('edit target needs closer permitted viewpoint');
  if(!AIR.has(b.name)){
   // A dig must not trigger unmodelled attached/flowing/gravity effects.

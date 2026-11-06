@@ -157,6 +157,7 @@ def run(args):
             from .voice_service import VoiceService
             voice=VoiceService(body.url,secrets['JEV_PERSONA_TOKEN'],config)
         runtime=Runtime(body,planner,memory,profile,max_calls=args.max_calls,voice=voice,
+            operators=config.get('operators',{}),
             vision_directory=run_dir/'vision' if config.get('vision',True) else None)
         status_data.update(status='running',session_id=state['session_id'],body_pid=body_process.pid)
         write_json(HOME/'status.json',status_data)
