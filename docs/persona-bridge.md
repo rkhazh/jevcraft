@@ -37,3 +37,27 @@ Respawn, session close and disconnect invalidate credentials; late packets while
 `POST /voice/session/refresh` uses the same bearer token and requires `X-Persona-Session` equal to the active persona session UUID. It accepts no gameplay command or user-supplied connection target. On a ready Survival connection, it clears existing credentials and starts one bounded handshake cycle;202 `{status:"pending"}` means requested, not authenticated. Refreshes within10 seconds of the last handshake receive429; stale/missing session headers receive409; unavailable/non-Survival/closed sessions receive503. Poll GET for the new generation. This endpoint does not restart Minecraft or spend provider calls.
 
 `POST /voice/state` requires the bearer token plus exact current `X-Persona-Session` and `X-Voice-Generation` headers. Its only body fields are boolean `muted` and `disabled`. Accepted changes send exactly those two boolean bytes on `voicechat:client_state`;200 `{status:"updated"}` acknowledges TCP dispatch, not UDP authentication. Stale session/generation returns409, unavailable connection503, invalid body400, and more than10 changes per second429. Identical state is deduplicated. On each accepted secret the unattached client advertises `{muted:true,disabled:true}`. The Python receiver may then enable listening with `{muted:!allow_send,disabled:false}` and close with both true, always using its captured session/generation. These messages carry no audio and are not proof that voice authentication succeeded.
+
+## Continuing action selection
+
+Opt-in `JEV_PERSONA_DECISION_MODE=continuing` advertises
+`decision_loop:{supported:true,mode:'continuing'}`. Python must use its matching
+`--decision-mode continuing`; legacy remains default. Existing `/goal`, `/cancel`
+and `/chat` handlers retain their authority and lease semantics.
+
+Authenticated session-fenced `POST /persona-action/choose` takes a bounded v1
+view and returns Jev's selected offered action ID without executing it.
+`POST /persona-action/validate` rechecks that selection's relevant native
+preconditions before Python dispatch. Heartbeat publication alone does not stale a
+selection, and unrelated movement does not prevent consultation or conversation.
+`POST /persona-inspect` reads <=64 local cells or captures a real guarded view;
+unloaded cells are unknown. Duplicate queries that twice add no information are
+suppressed until relevant facts change.
+
+Exact `edit` goals use existing work scheduling, cancellation, goal persistence,
+native dig/place guards and completion receipts. Batches have <=64 changed cells,
+<=64 preserve cells and 16-block admission bounds; actual operations need reach.
+Expected states and current authority are checked at mutation packet dispatch.
+The initial subset supports stateless full cubes/air and rejects unsupported
+neighbor effects. Existing build ownership and reservations are not relaxed.
+No live validation or arbitrary-physics guarantee follows from offline tests.

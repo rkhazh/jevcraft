@@ -5,7 +5,7 @@ const {dependenciesMatch}=require('./persona-actions');
 const AIR=new Set(['air','cave_air','void_air']);
 const key=p=>`${p.x},${p.y},${p.z}`;
 const point=p=>exact(p,['x','y','z'])&&[p.x,p.y,p.z].every(Number.isInteger)&&Math.abs(p.x)<=29999984&&Math.abs(p.z)<=29999984&&p.y>=-64&&p.y<=319;
-const blocked=reason=>Object.assign(Error(reason),{name:'Blocked',personaEditTerminal:true});
+const blocked=reason=>Object.assign(Error(reason),{name:'Blocked',personaEditTerminal:true,code:reason==='edit authority denied'?'authority_denied':reason.includes('unsupported')?'capability_unsupported':reason.includes('unloaded')?'temporarily_unavailable':reason.includes('changed')?'target_unresolved':'prerequisite_missing'});
 const state=b=>b?{name:b.name,state_id:b.stateId,properties:b.getProperties?.()||{}}:null;
 const same=(b,s)=>!!b&&b.name===s.name&&b.stateId===s.state_id&&dependenciesMatch(b.getProperties?.()||{},s.properties);
 const desired=(b,s)=>!!b&&(s.name==='air'?AIR.has(b.name):b.name===s.name&&dependenciesMatch(b.getProperties?.()||{},s.properties));
@@ -29,7 +29,7 @@ function verifyEdit(bot,goal){
 function simple(bot,name){
  if(AIR.has(name))return true;
  const block=bot.registry?.blocksByName?.[name];
- return !!block&&block.boundingBox==='block'&&!block.drops?.some(d=>typeof d==='object')&&!require('./skills').opensOnClick(name)&&!/(sand|gravel|concrete_powder|anvil|bed|door|piston|observer|redstone|water|lava|ice|snow|leaves|log|wood|stem|hyphae|sponge|tnt|coral|sculk|command|structure|jigsaw|spawner|portal|infested|silverfish|bee_nest|beehive)/.test(name)&&!(block.states||[]).length;
+ return !!block&&block.diggable!==false&&block.boundingBox==='block'&&!block.drops?.some(d=>typeof d==='object')&&!require('./skills').opensOnClick(name)&&!/(sand|gravel|concrete_powder|anvil|bed|door|piston|observer|redstone|water|lava|ice|snow|leaves|log|wood|stem|hyphae|sponge|tnt|coral|sculk|command|structure|jigsaw|spawner|portal|infested|silverfish|bee_nest|beehive)/.test(name)&&!(block.states||[]).length;
 }
 function assertCurrent(bot,goal,c,authorize){
  if(String(bot.game?.dimension).replace(/^minecraft:/,'')!==goal.dimension)throw blocked('edit dimension changed');
@@ -68,5 +68,5 @@ async function executeEdit(bot,goal,{task,save,authorize=(operation,p)=>require(
  if(desired(bot.blockAt(p),c.desired)){goal.editProgress[key(p)]={complete:true,state:state(bot.blockAt(p))};save();}
  goal.editVerification=verifyEdit(bot,goal);save();return goal.editVerification.verified;
 }
-function checkEdit(bot,spec){validateEdit(spec,{dimension:bot.game?.dimension,position:bot.entity?.position});for(const c of spec.cells){if(!same(bot.blockAt(new Vec3(c.position.x,c.position.y,c.position.z)),c.expected))throw blocked('edit target changed');for(const operation of [!AIR.has(c.expected.name)&&'dig',!AIR.has(c.desired.name)&&'place'].filter(Boolean))if(!require('./mutation-authority').queryMutation(bot,operation,new Vec3(c.position.x,c.position.y,c.position.z)).allowed)throw blocked('edit authority denied');}return true;}
+function checkEdit(bot,spec){validateEdit(spec,{dimension:bot.game?.dimension,position:bot.entity?.position});for(const c of spec.cells){if(!simple(bot,c.expected.name)||!simple(bot,c.desired.name))throw blocked('unsupported edit block');if(bot._registeredStructureProtection?.(c.position))throw blocked('unsupported registered structure edit');if(!same(bot.blockAt(new Vec3(c.position.x,c.position.y,c.position.z)),c.expected))throw blocked('edit target changed');for(const operation of [!AIR.has(c.expected.name)&&'dig',!AIR.has(c.desired.name)&&'place'].filter(Boolean))if(!require('./mutation-authority').queryMutation(bot,operation,new Vec3(c.position.x,c.position.y,c.position.z)).allowed)throw blocked('edit authority denied');}return true;}
 module.exports={validateEdit,executeEdit,verifyEdit,checkEdit};

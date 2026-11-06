@@ -89,7 +89,7 @@ function createPersona({read, start, stop, reaction=null, decisionMode='legacy',
    if(!Number.isFinite(d)||dim!==current.dimension||d>api.MAX_DISTANCE)return 'unsupported_visit';
    if(d<=api.ARRIVAL_DISTANCE)return 'already_near_visit_destination';
   }
-  else if(s?.kind==='edit'){try{if(!checkEdit(s))return 'unsupported_edit';}catch(error){return {reason:'edit_not_admissible',detail:String(error.message).slice(0,240)};}}
+  else if(s?.kind==='edit'){try{if(!checkEdit(s))return 'unsupported_edit';}catch(error){return {reason:error.code||'edit_not_admissible',detail:String(error.message).slice(0,240)};}}
   else if(s?.kind==='build') {
    if(!exact(s,['kind','request','mode','build_id','schematic',...(Object.hasOwn(s,'site_binding')?['site_binding']:[])])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
    try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(err){if(!err.code&&typeof err.validationDetail==='string')return {reason:'invalid_build_geometry',detail:err.validationDetail.replace(/[\p{Cc}\p{Cf}]/gu,' ').slice(0,240)};return err.code||'invalid_build_geometry';}
