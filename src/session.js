@@ -891,6 +891,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,movementAffordances:()=>require('./persona-move').standingAffordances(bot,{enabled:personaLocalMove&&ready&&!ended}),checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
         mutation_authority:require('./mutation-authority').mutationAuthoritySummary(bot),
+        pending_edits:require('./persona-pending-work').advertiseEdits(store.read(),{worldId:pendingWorldId,personaId:persona?.actorProfile?.persona_id,dimension:bot.game?.dimension},bot),
         edit_capabilities:{enabled:process.env.JEV_PERSONA_DECISION_MODE==='continuing'&&require('./mutation-authority').hasMutationAuthority(bot),max_cells:64,max_distance:16,subset:'stateless solid cubes and air; registered structures use existing build edit'},
         vision_capabilities:vision?.capabilities()||{enabled:false,look:false},
         execution:require('./persona-execution').executionSnapshot(bot,active),
@@ -915,7 +916,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       visitAffordances:principal=>visitApi.capabilities(bot,{known:world.known,principal,enabled:visitEnabled&&ready&&!ended}),
       resolveVisit:bot._personaVisitResolve,
       verifyVisit:goal=>visitApi.verifyVisit(bot,goal),
-      checkEdit:spec=>process.env.JEV_PERSONA_DECISION_MODE==='continuing'&&require('./mutation-authority').hasMutationAuthority(bot)&&require('./persona-edit').checkEdit(bot,spec),
+      checkEdit:spec=>{if(process.env.JEV_PERSONA_DECISION_MODE!=='continuing'||!require('./mutation-authority').hasMutationAuthority(bot))return false;const pending=require('./persona-pending-work'),saved=store.read(),resume=pending.adoptEdit(saved,spec,{worldId:pendingWorldId,personaId:persona?.actorProfile?.persona_id,dimension:bot.game?.dimension});if(!resume)pending.capacity(saved);return require('./persona-edit').checkEdit(bot,spec,resume?.mechanical.editProgress);},
       verifyEdit:goal=>{if(!goal)return false;goal.editVerification=require('./persona-edit').verifyEdit(bot,goal);return goal.editVerification.verified;},
       checkBuild:(spec,principal)=>!!buildApi.prepareBuild(bot,spec,principal,{enabled:buildEnabled}),
       verifyBuild:goal=>{
@@ -932,8 +933,9 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         if(spec.kind==='visit')visitApi.assertDestination(bot,spec,id=>bot._personaVisitResolve(id,spec.from));
         const build=spec.kind==='build'?buildApi.prepareBuild(bot,spec,spec.from,{enabled:buildEnabled}):{};
         const pending=require('./persona-pending-work'),previous=store.read();
+        const resumedEdit=spec.kind==='edit'?pending.adoptEdit(previous,spec,{worldId:pendingWorldId,personaId:spec.personaId,dimension:bot.game?.dimension}):null;
         const resumed=spec.personaCraftContinuation?pending.adopt(previous,spec.personaCraftContinuation,{worldId:pendingWorldId,personaId:spec.personaId,dimension:bot.game?.dimension}):null;
-        const goal={...spec,...build,...(resumed?.mechanical||{}),...(spec.kind==='move'?{personaMovePolicy:{anchor:{...bot.entity.position},dimension:'overworld'}}:{}),version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:resumed?resumed.remaining:pending.retain(previous),requesterPosition:spec.requesterPosition||null,
+        const goal={...spec,...build,...(resumed?.mechanical||{}),...(resumedEdit?.mechanical||{}),...(spec.kind==='move'?{personaMovePolicy:{anchor:{...bot.entity.position},dimension:'overworld'}}:{}),version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:resumed?resumed.remaining:resumedEdit?resumedEdit.remaining:pending.retain(previous),requesterPosition:spec.requesterPosition||null,
           initialInventory:bot.inventory.items().map(i=>({name:i.name,count:i.count}))};
         saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
       },

@@ -5,7 +5,7 @@ const {dimension}=require('./memory');
 const MAX_PENDING=8;
 const point=p=>p&&['x','y','z'].every(k=>Number.isFinite(p[k]))?{x:p.x,y:p.y,z:p.z}:null;
 const samePoint=(a,b)=>!!a&&!!b&&['x','y','z'].every(k=>a[k]===b[k]);
-const physical=goal=>!!goal?.smelting||!!goal?.smeltingSides?.length||Object.values(goal?.smeltingElsewhere||{}).some(Boolean);
+const physical=goal=>goal?.kind==='edit'&&goal.status!=='complete'&&Array.isArray(goal.cells)&&goal.cells.length>0||!!goal?.smelting||!!goal?.smeltingSides?.length||Object.values(goal?.smeltingElsewhere||{}).some(Boolean);
 const pick=(value,keys)=>Object.fromEntries(keys.filter(k=>value?.[k]!==undefined).map(k=>[k,structuredClone(value[k])]));
 const batch=value=>pick(value,['item','from','fuelItem','position','dimension','count','targetInventory','startedAt','at']);
 function mechanical(goal){
@@ -16,10 +16,11 @@ function mechanical(goal){
  if(goal.placedWorkstations?.length)out.placedWorkstations=structuredClone(goal.placedWorkstations);
  return out;
 }
-const id=goal=>goal.personaCraftContinuation?.id||goal.personaGoalId||`unscoped:${createHash('sha256').update(JSON.stringify(mechanical(goal))).digest('hex')}`;
+const id=goal=>goal.kind==='edit'?(goal.personaEditContinuation?.source_goal_id||goal.personaGoalId):goal.personaCraftContinuation?.id||goal.personaGoalId||`unscoped:${createHash('sha256').update(JSON.stringify(mechanical(goal))).digest('hex')}`;
 function retain(saved){
  const records=suspendPrevious(saved,{retain:physical}).filter(physical),unique=new Map();
  for(const record of records){
+  if(record.kind==='edit'){const compact=pick(record,['version','kind','dimension','cells','preserve','source_task_id','editProgress','editVerification','from','personaId','personaWorldId','personaGoalId','personaSessionId','personaEditContinuation','createdAt','status']);unique.set(id(record),compact);continue;}
   const batches=[record.smelting,...Object.values(record.smeltingElsewhere||{}),...(record.smeltingSides||[])].filter(Boolean);
   const seen=new Set();
   for(const [index,b]of batches.entries()){
@@ -80,3 +81,15 @@ function observeBatch(saved,input,output,{remaining=saved.count}={}){
  return total;
 }
 module.exports={MAX_PENDING,physical,retain,advertise,select,matches,prepare,capacity,adopt,stations,reserved,observeBatch};
+
+const editSpec=goal=>pick(goal,['kind','dimension','cells','preserve','source_task_id']);
+function editScope(goal,{worldId,personaId,dimension:here}){return goal.kind==='edit'&&goal.personaWorldId===worldId&&goal.personaId===personaId&&goal.from===`persona:${personaId}`&&dimension(goal.dimension)===dimension(here);}
+function advertiseEdits(saved,context,bot){
+ return retain(saved).filter(g=>editScope(g,context)).slice(0,2).map(g=>({id:id(g),source_goal_id:id(g),source_session_id:g.personaSessionId||null,recorded_at:g.personaEditContinuation?.recorded_at??(Number.isFinite(Date.parse(g.createdAt))?Date.parse(g.createdAt)/1000:null),status:'last_known',access:'unverified',spec:editSpec(g),progress:g.editProgress||{},verification:require('./persona-edit').verifyEdit(bot,g)}));
+}
+function adoptEdit(saved,spec,context){
+ const all=retain(saved),source=all.find(g=>editScope(g,context)&&require('./persona-actions').dependenciesMatch(editSpec(g),editSpec(spec)));
+ if(!source)return null;
+ return {mechanical:{editProgress:structuredClone(source.editProgress||{}),personaEditContinuation:{source_goal_id:id(source),recorded_at:source.personaEditContinuation?.recorded_at??(Number.isFinite(Date.parse(source.createdAt))?Date.parse(source.createdAt)/1000:null)}},remaining:all.filter(g=>g!==source)};
+}
+module.exports.advertiseEdits=advertiseEdits;module.exports.adoptEdit=adoptEdit;

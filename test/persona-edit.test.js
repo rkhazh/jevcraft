@@ -17,3 +17,13 @@ test('real native mutation guards permit one granted dig and verify its observed
  authority.installMutationAuthority(bot,{policy,worldId:'w',principal:'actor',world:{known:{},store:{save(){}}}});mutations.installStructureMutationGuard(bot,{validGoal:()=>true});
  const goal=f().spec;assert.equal(await executeEdit(bot,goal,{task:{check(){}},save(){}}),true);assert.deepEqual(packets.map(p=>p[1].status),[0,2]);assert.equal(goal.editVerification.verified,true);
 });
+test('partial edit baseline survives actual retention and restart without auto-resume',()=>{
+ const pending=require('../src/persona-pending-work'),{GoalStore}=require('../src/objectives'),{mkdtempSync,rmSync}=require('node:fs'),{join}=require('node:path'),{tmpdir}=require('node:os');
+ const dir=mkdtempSync(join(tmpdir(),'jev-edit-restart-'));
+ try{const path=join(dir,'goal.json'),store=new GoalStore(path),x=f();
+ const old={...x.spec,version:1,personaGoalId:'old-goal',personaId:'p',personaWorldId:'w',from:'persona:p',status:'cancelled',createdAt:'2026-11-06T00:00:00Z',editProgress:{'1,64,0':{intermediate:{name:'air',state_id:0,properties:{}}}}};
+ store.save(old);store.flushSync();const next={version:1,kind:'move',status:'complete',suspendedTasks:pending.retain(store.read())};store.save(next);store.flushSync();
+ const restarted=new GoalStore(path).read(),retained=pending.retain(restarted);assert.equal(retained.length,1);assert.deepEqual(retained[0].cells,old.cells);assert.deepEqual(retained[0].editProgress,old.editProgress);
+ x.bot.blockAt=()=>null;const observed=pending.advertiseEdits(restarted,{worldId:'w',personaId:'p',dimension:'overworld'},x.bot);assert.equal(observed.length,1);assert.equal(observed[0].verification.verified,false);assert.equal(observed[0].verification.unknown.length,1);assert.equal(observed[0].source_goal_id,'old-goal');assert.equal(restarted.kind,'move');
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
