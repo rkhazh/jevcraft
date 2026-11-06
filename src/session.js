@@ -886,6 +886,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     const safeToLook=()=>ready&&!ended&&(!active||active.idle)&&bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false&&!['survival','vitals'].includes(bot._turn?.holder);
     bot._personaVisitResolve=(id,principal)=>visitApi.resolveDestination(bot,id,{known:world.known,principal});
     persona = require('./persona-admission').createPersona({
+      decisionMode:process.env.JEV_PERSONA_DECISION_MODE==='continuing'?'continuing':'legacy',
       reaction:require('./persona-reaction').createPersonaReaction({client:contextual(()=>active?.goal),getPersona:()=>ended?null:persona,getGoal:()=>active?.goal,canObserve:()=>safeToLook()&&!visionCapturePending&&Date.now()-lastVisionCapture>=5000}),
       rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,movementAffordances:()=>require('./persona-move').standingAffordances(bot,{enabled:personaLocalMove&&ready&&!ended}),checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),

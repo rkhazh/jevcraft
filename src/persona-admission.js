@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === [...keys].sort().join();
 const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v) ? v.map(x=>JSON.parse(stable(x))) : Object.fromEntries(Object.keys(v).sort().map(k=>[k,JSON.parse(stable(v[k]))]))) : v);
-function createPersona({read, start, stop, reaction=null, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({}),visitAffordances=()=>({enabled:false,destinations:[]}),resolveVisit=()=>null,verifyVisit=()=>false,craftAffordances=()=>({enabled:false,items:[]}),checkCraft=()=>false}) {
+function createPersona({read, start, stop, reaction=null, decisionMode='legacy', impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({}),visitAffordances=()=>({enabled:false,destinations:[]}),resolveVisit=()=>null,verifyVisit=()=>false,craftAffordances=()=>({enabled:false,items:[]}),checkCraft=()=>false}) {
  rendezvous=require('./persona-rendezvous').validateRendezvous(rendezvous);
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
  let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve(), actorProfile=null, sharedMemory=null;
@@ -34,7 +34,7 @@ function createPersona({read, start, stop, reaction=null, impossible=()=>false, 
  const enqueue=fn=>{const p=serial.then(fn);serial=p.catch(()=>{});return p};
  function emit(data) { const event={...data,event_id:randomUUID(),session_id:sessionId,sequence:++sequence,observed_at:Date.now()/1000}; if(data.type==='goal'&&['complete','blocked','failed','expired','cancelled'].includes(data.status))lastResult=structuredClone(event); log.push(event);if(log.length>1000)log.shift();return event; }
  function snapshot() {
-  const state={...read(),actor_profile:{supported:true,persona_id:closed?null:actorProfile?.persona_id??null},shared_context:{supported:true,revision:sharedMemory?.revision??0},...(typeof reaction==='function'?{reaction_capabilities:{enabled:!closed}}:{})}, id=randomUUID(), now=Date.now()/1000;
+  const state={...read(),decision_loop:{supported:true,mode:decisionMode},actor_profile:{supported:true,persona_id:closed?null:actorProfile?.persona_id??null},shared_context:{supported:true,revision:sharedMemory?.revision??0},...(typeof reaction==='function'?{reaction_capabilities:{enabled:!closed}}:{})}, id=randomUUID(), now=Date.now()/1000;
   const craft=craftAffordances(actorProfile?.persona_id??null);
   const visit=visitAffordances(actorProfile?`persona:${actorProfile.persona_id}`:null);
   observations.set(id,{at:now,mono:performance.now(),visit:structuredClone(visit),craft:structuredClone(craft)});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
