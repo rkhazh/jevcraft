@@ -1,0 +1,6 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {createInspector}=require('../src/persona-inspect');
+test('unloaded cells are unknown; inspection never moves or mutates',async()=>{const bot={entity:{position:{x:0,y:64,z:0}},game:{dimension:'overworld'},blockAt:()=>null};const i=createInspector({bot,getSessionId:()=> 's',now:()=>100});const r=await i.inspect({kind:'cells',cells:[{x:1,y:64,z:0}]},'s');assert.equal(r.cells[0].state,null);assert.equal(r.status,'complete');});
+test('two no information results suppress exact repeat until world changes',async()=>{let state=1;const bot={entity:{position:{x:0,y:64,z:0}},game:{dimension:'overworld'},blockAt:()=>({name:'stone',stateId:state,getProperties:()=>({})})};const i=createInspector({bot,getSessionId:()=> 's',now:()=>100});const q={kind:'cells',cells:[{x:1,y:64,z:0}]};for(let n=0;n<3;n++)await i.inspect(q,'s');assert.equal(i.canInspect(q),false);state=2;assert.equal(i.canInspect(q),true);});
+test('capture failure does not invent a frame',async()=>{const i=createInspector({bot:{entity:{position:{x:0,y:64,z:0}}},getSessionId:()=> 's',canView:()=>true,capture:async()=>{throw Error('renderer unavailable')}});await assert.rejects(i.inspect({kind:'view',target:null},'s'));});
