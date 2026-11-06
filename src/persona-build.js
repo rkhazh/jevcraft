@@ -1,25 +1,25 @@
 'use strict';
 const {Vec3}=require('vec3');
-const {validateSchematic,buildPalette,CEILING}=require('./designer');
+const {validateSchematic,buildPalette}=require('./designer');
 const {matchesBuildBlock,buildFootprint,matchesOwnership,unchangedOriginalFoundation,personaBuildCellStatus}=require('./build-blocks');
 const LIMITS=Object.freeze({max_blocks:1024,max_size:[24,16,24],max_regions:64});
-const dimension=value=>String(value||'').replace(/^minecraft:/,'').replace(/^the_/,'');
+const dimension=value=>String(value||'').replace(/^minecraft:/,'');
 function fail(message,terminal=false){const code=({'building disabled':'building_disabled','unknown or unowned structure':'build_not_owned','structure out of reach':'build_out_of_range','structure changed by another builder':'build_structure_changed','edit needs loaded structure blocks':'build_chunks_unloaded'})[message]||'build_policy_rejected';throw Object.assign(new Error(`Persona build: ${message}`),{name:'PersonaBuildPolicy',code,...(terminal?{personaBuildTerminal:true}:{})});}
-function validate(source,registry,nativeCapabilities=false) {
- if(!nativeCapabilities&&(!source||Object.keys(source).sort().join()!==['name','description','size','palette','regions','entrance','existingOffset','site'].sort().join()||!Array.isArray(source.size)||source.size.some((n,i)=>n>LIMITS.max_size[i])||!Array.isArray(source.regions)||source.regions.length>LIMITS.max_regions||source.site!==null))fail('schematic exceeds policy');
- if(!nativeCapabilities&&Buffer.byteLength(JSON.stringify(source))>24000)fail('schematic too large');
+function validate(source,registry) {
+ if(!source||Object.keys(source).sort().join()!==['name','description','size','palette','regions','entrance','existingOffset','site'].sort().join()||!Array.isArray(source.size)||source.size.some((n,i)=>n>LIMITS.max_size[i])||!Array.isArray(source.regions)||source.regions.length>LIMITS.max_regions||source.site!==null)fail('schematic exceeds policy');
+ if(Buffer.byteLength(JSON.stringify(source))>24000)fail('schematic too large');
  let design;
  try{design=validateSchematic(source,registry);}catch(err){
   if(typeof err.message==='string'&&err.message.startsWith('Invalid building schematic:'))err.validationDetail=err.message.replace(/[\p{Cc}\p{Cf}]/gu,' ').slice(0,240);
   throw err;
  }
- if(!nativeCapabilities&&design.blocks.length>LIMITS.max_blocks)fail('too many blocks');
+ if(design.blocks.length>LIMITS.max_blocks)fail('too many blocks');
  return {...design,backend:'persona-validated',createdAt:new Date().toISOString()};
 }
-function siteBinding(value,nativeCapabilities=false) {
+function siteBinding(value) {
  if(value==null)return null;
  const p=value.position;
- if(Object.keys(value).sort().join()!=='dimension,position,radius'||!(nativeCapabilities?['overworld','nether','end'].includes(dimension(value.dimension)):value.dimension==='overworld')||!p||Object.keys(p).sort().join()!=='x,y,z'||![p.x,p.y,p.z].every(Number.isFinite)||Math.abs(p.x)>29999984||Math.abs(p.z)>29999984||p.y< -64||p.y>319||!Number.isFinite(value.radius)||value.radius<1||!nativeCapabilities&&value.radius>32)throw Object.assign(new Error('Invalid requested build site'),{code:'invalid_build_site'});
+ if(Object.keys(value).sort().join()!=='dimension,position,radius'||value.dimension!=='overworld'||!p||Object.keys(p).sort().join()!=='x,y,z'||![p.x,p.y,p.z].every(Number.isFinite)||Math.abs(p.x)>29999984||Math.abs(p.z)>29999984||p.y< -64||p.y>319||!Number.isFinite(value.radius)||value.radius<1||value.radius>32)throw Object.assign(new Error('Invalid requested build site'),{code:'invalid_build_site'});
  return structuredClone(value);
 }
 function siteCenter(origin,size) {
@@ -29,7 +29,7 @@ function siteCenter(origin,size) {
 function siteAllowed(binding,origin,size,dim='overworld') {
  if(!binding)return true;
  const center=siteCenter(origin,size);
- return dimension(dim)===dimension(binding.dimension)&&!!center&&Math.abs(center.y-binding.position.y)<=4&&Math.hypot(center.x-binding.position.x,center.z-binding.position.z)<=binding.radius;
+ return dimension(dim)===binding.dimension&&!!center&&Math.abs(center.y-binding.position.y)<=4&&Math.hypot(center.x-binding.position.x,center.z-binding.position.z)<=binding.radius;
 }
 function assertSite(binding,origin,dim,size) {
  if(!siteAllowed(binding,origin,size,dim))throw Object.assign(new Error('Structure is outside the requested build site'),{code:'build_site_mismatch'});
@@ -48,42 +48,42 @@ function schematicAuthorityAllowed(bot,design,origin,projectId){
  const translate=list=>(list||[]).map(p=>({...p,x:p.x+origin.x,y:p.y+origin.y,z:p.z+origin.z}));
  return !buildAuthorityDenial(bot,{blocks:translate(design.blocks),empty:translate(design.empty)},projectId);
 }
-function prepareBuild(bot,spec,principal,{enabled=false,nativeCapabilities=bot?._personaNativeCapabilities===true}={}) {
+function prepareBuild(bot,spec,principal,{enabled=false}={}) {
  if(!enabled)fail('building disabled');
- const here={...bot.entity.position}, binding=siteBinding(spec.site_binding,nativeCapabilities);
- if(binding&&dimension(bot.game?.dimension)!==dimension(binding.dimension))throw Object.assign(new Error('Requested build site is in another dimension'),{code:'build_site_mismatch'});
+ const here={...bot.entity.position}, binding=siteBinding(spec.site_binding);
+ if(binding&&dimension(bot.game?.dimension)!==binding.dimension)throw Object.assign(new Error('Requested build site is in another dimension'),{code:'build_site_mismatch'});
  const anchor=binding?{...binding.position}:here;
- if(!nativeCapabilities&&Math.hypot(anchor.x-here.x,anchor.y-here.y,anchor.z-here.z)>1024)fail('structure out of reach');
- const base={personaBuildPolicy:{anchor,site_binding:binding,...(nativeCapabilities?{nativeCapabilities:true}:{})},suspendedTasks:[]};
+ if(Math.hypot(anchor.x-here.x,anchor.y-here.y,anchor.z-here.z)>1024)fail('structure out of reach');
+ const base={personaBuildPolicy:{anchor,site_binding:binding},suspendedTasks:[]};
  if(binding&&spec.mode==='fresh'){base.buildAnchor={...anchor};if(Math.hypot(anchor.x-here.x,anchor.y-here.y,anchor.z-here.z)>8)base.personaBuildReturn={target:{...anchor},entryId:null};}
  const entry=spec.build_id?bot.buildRegistry?.find(spec.build_id):null;
  if(spec.mode!=='fresh') {
-  if(!entry||!nativeCapabilities&&entry.from!==principal||dimension(entry.dimension)!==dimension(bot.game?.dimension))fail('unknown or unowned structure');
+  if(!entry||entry.from!==principal||dimension(entry.dimension)!==dimension(bot.game?.dimension))fail('unknown or unowned structure');
   assertSite(binding,entry.origin,entry.dimension,entry.design?.source?.size);
   const distance=Math.hypot(entry.origin.x-here.x,entry.origin.y-here.y,entry.origin.z-here.z);
-  if(!nativeCapabilities&&distance>1024)fail('structure out of reach');
+  if(distance>1024)fail('structure out of reach');
   base.personaBuildPolicy.anchor={...entry.origin};
   if(distance>8)base.personaBuildReturn={target:{...(entry.entrance||entry.origin)},entryId:entry.id};
  }
  if(['finish','repair'].includes(spec.mode)){
   if(spec.schematic!==null||!entry?.design?.source)fail('continuation needs saved design');
-  const design=validate(entry.design.source,bot.registry,nativeCapabilities);
+  const design=validate(entry.design.source,bot.registry);
   assertBuildPolicy({...base,design,blueprint:entry.blueprint,buildId:entry.id},bot);
   return {...base,buildOwned:structuredClone(entry.buildOwned||{}),continueBuild:{id:entry.id,mode:spec.mode}};
  }
  if(!['fresh','edit'].includes(spec.mode))fail('unsupported mode');
  if(spec.mode==='edit'&&require('./mutation-authority').pendingRestorations(bot).some(r=>r.restore.project_id===entry?.id))fail('restore pending temporary project placements before editing');
  if(spec.mode==='edit'&&entry?.buildAccess)fail('finish pending local access restoration before editing');
- const design=validate(spec.schematic,bot.registry,nativeCapabilities);
+ const design=validate(spec.schematic,bot.registry);
  if(spec.mode==='fresh'){
   if(spec.build_id!==null||design.existingOffset!==null)fail('fresh structure cannot replace existing work');
-  if(!nativeCapabilities&&!require('./mutation-authority').hasStandingBuildScope(bot))fail('standing edit permission required for a new structure',true);
+  if(!require('./mutation-authority').hasStandingBuildScope(bot))fail('standing edit permission required for a new structure',true);
   return {...base,design};
  }
  if(!design.existingOffset)fail('edit must align existing structure');
  const origin={x:entry.origin.x-design.existingOffset[0],y:entry.origin.y-design.existingOffset[1],z:entry.origin.z-design.existingOffset[2]};
- if(!nativeCapabilities&&!schematicAuthorityAllowed(bot,design,origin,entry.id))fail('standing edit permission required for the proposed structure cells',true);
- if(!nativeCapabilities&&!base.personaBuildReturn)verifiedEditOwnership(bot,entry);
+ if(!schematicAuthorityAllowed(bot,design,origin,entry.id))fail('standing edit permission required for the proposed structure cells',true);
+ if(!base.personaBuildReturn)verifiedEditOwnership(bot,entry);
  return {...base,design,buildId:entry.id,buildAnchor:{...entry.origin},buildContinuation:{mode:'edit',target:entry.id,name:entry.name,placement:'beside_target'}};
 }
 function verifiedEditOwnership(bot,entry) {
@@ -102,16 +102,10 @@ function verifiedEditOwnership(bot,entry) {
 }
 function assertBuildPolicy(goal,bot) {
  if(!goal.personaBuildPolicy)return;
- const nativeCapabilities=goal.nativeCapabilities===true||goal.personaBuildPolicy.nativeCapabilities===true||bot?._personaNativeCapabilities===true;
  const source=goal.design?.source;
- if(!nativeCapabilities&&source&&(source.size.some((n,i)=>n>LIMITS.max_size[i])||source.regions.length>LIMITS.max_regions))fail('design exceeds policy');
+ if(source&&(source.size.some((n,i)=>n>LIMITS.max_size[i])||source.regions.length>LIMITS.max_regions))fail('design exceeds policy');
  const bp=goal.blueprint;if(!bp)return;
- assertSite(goal.personaBuildPolicy.site_binding,bp.origin,bot?.game?.dimension||goal.personaBuildPolicy.site_binding?.dimension,goal.design?.source?.size);
- if(nativeCapabilities){
-  const cells=[...(bp.blocks||[]),...(bp.empty||[]),...(bp.terrain?.clear||[]),...(bp.terrain?.fill||[])];
-  if(!Array.isArray(bp.blocks)||bp.blocks.length>CEILING.blocks||cells.some(p=>!p||![p.x,p.y,p.z].every(Number.isFinite)))fail('invalid native build geometry');
-  return;
- }
+ assertSite(goal.personaBuildPolicy.site_binding,bp.origin,goal.personaBuildPolicy.site_binding?.dimension,goal.design?.source?.size);
  if(!Array.isArray(bp.blocks)||bp.blocks.length>LIMITS.max_blocks)fail('placed geometry exceeds policy');
  const clear=bp.terrain?.clear||[],fill=bp.terrain?.fill||[];
  if(clear.length+fill.length>2048)fail('earthworks exceed policy');
@@ -122,8 +116,7 @@ function assertBuildPolicy(goal,bot) {
 function buildVerification(bot,goal) {
  const report={verified:false,exact_material_match:false,matched_blocks:0,retained_blocks:0,retained_enclosed_natural:[],mismatched_blocks:0,unknown_blocks:0,blocked_empty:0,samples:[]};
  try{
-  assertBuildPolicy(goal,bot);const bp=goal.blueprint,nativeCapabilities=goal.nativeCapabilities===true||goal.personaBuildPolicy?.nativeCapabilities===true||bot?._personaNativeCapabilities===true;
-  if(!bp?.blocks?.length||bp.blocks.length>(nativeCapabilities?CEILING.blocks:LIMITS.max_blocks))return report;
+  assertBuildPolicy(goal);const bp=goal.blueprint;if(!bp?.blocks?.length||bp.blocks.length>LIMITS.max_blocks)return report;
   const sample=(p,expected,observed)=>{if(report.samples.length<5)report.samples.push({position:{x:p.x,y:p.y,z:p.z},expected,observed});};
   const cells=[...new Map(bp.blocks.flatMap(buildFootprint).map(cell=>[`${cell.x},${cell.y},${cell.z}`,cell])).values()];
   for(const cell of cells){
@@ -144,7 +137,7 @@ function buildVerification(bot,goal) {
  return report;
 }
 function verifyBuild(bot,goal){return buildVerification(bot,goal).verified;}
-function capabilities(bot,enabled,nativeCapabilities=bot?._personaNativeCapabilities===true){return {...(nativeCapabilities?{max_blocks:CEILING.blocks,max_size:[CEILING.width,CEILING.height,CEILING.depth],max_regions:CEILING.regions}:LIMITS),enabled,...(nativeCapabilities?{native_capabilities:true}:{}),modes:enabled?['fresh','finish','repair','edit']:[],allowed_blocks:enabled&&bot.registry?.blocksArray?buildPalette(bot.registry).slice(0,512):[]};}
+function capabilities(bot,enabled){return {...LIMITS,enabled,modes:enabled?['fresh','finish','repair','edit']:[],allowed_blocks:enabled&&bot.registry?.blocksArray?buildPalette(bot.registry).slice(0,512):[]};}
 function designAdaptation(blueprint) {
  // Verification covers the selected, terrain-adjusted blueprint. Its source
  // schematic can still contain requested cells omitted to preserve others.
@@ -155,7 +148,7 @@ function designAdaptation(blueprint) {
  return {...result,status:'recorded',preserved_cell_count:cells.length,preserved_cells:cells.slice(0,5).map(({x,y,z})=>({x,y,z}))};
 }
 function describeBuilds(bot) {
- const entries=(bot.buildRegistry?.all(bot.game?.dimension)||[]).filter(e=>bot._personaNativeCapabilities===true||e.from?.startsWith('persona:')).slice(-4).reverse();
+ const entries=(bot.buildRegistry?.all(bot.game?.dimension)||[]).filter(e=>e.from?.startsWith('persona:')).slice(-4).reverse();
  // Bound aggregate world reads: footprint expansion is at most two cells and
  // retained natural foundation checks at most six neighbours per cell.
  let readBudget=4096;
@@ -172,7 +165,7 @@ function describeBuilds(bot) {
    last_verified_at:entry.personaVerifiedAt||null,last_verification:entry.personaVerification||null,
    origin:entry.origin,site_center:siteCenter(entry.origin,entry.design?.source?.size),bounds:entry.bounds,
    distance:bot.entity?.position&&entry.origin?Math.round(Math.hypot(entry.origin.x-bot.entity.position.x,entry.origin.y-bot.entity.position.y,entry.origin.z-bot.entity.position.z)):null,
-   block_count:entry.blueprint?.blocks?.length||0,...(index===0&&entry.design?.source&&(bot._personaNativeCapabilities===true||Buffer.byteLength(JSON.stringify(entry.design.source))<=24000)?{schematic:entry.design.source}:{}),
+   block_count:entry.blueprint?.blocks?.length||0,...(index===0&&entry.design?.source&&Buffer.byteLength(JSON.stringify(entry.design.source))<=24000?{schematic:entry.design.source}:{}),
   };
  });
 }

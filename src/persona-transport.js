@@ -44,7 +44,7 @@ async function startPersonaTransport({getSession,token,port=8766}){
     const after=Number(url.searchParams.get('after')||0);if(!Number.isSafeInteger(after)||after<0)return reply(400,{error:'invalid_cursor'});return reply(200,api.events(after));
    }
    if(req.method!=='POST'||!['/goal','/cancel','/chat','/voice/state','/look','/persona-profile','/persona-context','/reaction','/persona-action/choose','/persona-action/validate','/persona-inspect'].includes(url.pathname))return reply(404,{error:'not_found'});
-   let size=0, chunks=[];for await(const chunk of req){size+=chunk.length;if(size>(api.nativeCapabilities?262144:32768)){reply(413,{error:'payload_too_large'});req.resume();return;}chunks.push(chunk);}
+   let size=0, chunks=[];for await(const chunk of req){size+=chunk.length;if(size>32768){reply(413,{error:'payload_too_large'});req.resume();return;}chunks.push(chunk);}
    const data=parseStrict(Buffer.concat(chunks).toString('utf8'));
    if(url.pathname==='/persona-inspect'||url.pathname==='/persona-action/validate'){
     const id=req.headers['x-persona-session'];

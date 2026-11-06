@@ -87,45 +87,6 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(any(e.get('verified_completion') for e in self.memory.recent()))
     def test_close_stops_planner(self):
         self.runtime.tick();self.runtime.close();self.assertTrue(self.planner.closed)
-    def test_native_goal_survives_inventory_change_and_has_no_short_lease(self):
-        self.body.state['native_capabilities']={'enabled':True}
-        self.runtime.tick();self.body.state['inventory']={'dirt':2}
-        self.planner.answer={**plan(),'goal':{'kind':'native','request':'Get 128 stones for SkipperBot','requester':'SkipperBot'}}
-        self.runtime.tick()
-        self.assertEqual(len(self.body.goals),1)
-        self.assertIsNone(self.body.goals[0]['expires_at'])
-    def test_cancel_then_inspect_does_not_drop_the_inspection(self):
-        self.runtime.session='s';self.runtime.owned_goal='g'
-        self.body.state['active_goal_id']='g'
-        self.runtime.apply({**plan(),'cancel':True,'inspect':{'kind':'cells','cells':[]}},self.body.snapshot(),self.body.snapshot())
-        self.assertEqual(self.runtime.inspection,{'cells':[]})
-    def test_zero_planner_budget_means_no_operator_cap(self):
-        self.runtime.max_calls=0;self.runtime.calls=1000
-        self.runtime.tick();self.assertTrue(self.planner.pending)
-    def test_native_ambiguous_send_reconciles_the_same_goal_identity(self):
-        now=[100]
-        self.runtime.clock=lambda:now[0]
-        self.body.state['native_capabilities']={'enabled':True};self.body.fail_submit=True
-        self.answer(goal={'kind':'native','request':'Come here','requester':'SkipperBot'})
-        first=self.body.goals[0]
-        now[0]=106;self.body.state['observed_at']=106;self.body.fail_submit=False
-        self.runtime.tick()
-        self.assertEqual(self.body.goals,[first,first])
-        self.assertIsNone(self.runtime.uncertain)
-    def test_native_dream_outcome_reaches_planner_as_unverified_evidence(self):
-        self.body.queue=[dict(type='native_work',event_id='d',session_id='s',sequence=1,status='complete',verified=False,kind='obtain',dream='custom')]
-        self.runtime.tick()
-        result=next(e for e in self.planner.inputs[-1]['memory'] if e.get('event_id')=='d')
-        self.assertFalse(result['verified_completion'])
-    def test_native_cancel_stops_background_preparation_without_owned_goal(self):
-        self.body.state['native_capabilities']={'enabled':True}
-        self.answer(cancel=True)
-        self.assertEqual(self.body.goals[0]['spec'],{'kind':'native','request':'stop','requester':None})
-    def test_native_coordinate_plan_cannot_reuse_coordinates_after_dimension_change(self):
-        self.body.state['native_capabilities']={'enabled':True};self.runtime.tick()
-        self.body.state['dimension']='the_nether'
-        self.planner.answer={**plan(),'goal':{'kind':'move','target':{'x':0,'y':65,'z':4}}}
-        self.runtime.tick();self.assertEqual(self.body.goals,[])
     def test_operator_instruction_requires_configured_name_and_server_uuid(self):
         self.runtime.operators={'SkipperBot':'dd3e26cd-a0b4-3bfe-be21-e65512acf502'}
         self.body.queue=[dict(type='chat',event_id='a',session_id='s',sequence=1,user='SkipperBot',sender_uuid='dd3e26cd-a0b4-3bfe-be21-e65512acf502',msg='Dig this'),
@@ -214,17 +175,6 @@ class LaunchTests(unittest.TestCase):
     def test_body_launch_rejects_unbounded_session(self):
         from tolik.launch import body_environment
         with self.assertRaises(ValueError):body_environment({}, {}, Path('/tmp/run'),{},601,40)
-    def test_native_body_accepts_optional_budgets(self):
-        from tolik.launch import body_environment
-        cfg={'native_capabilities':True,'state_dir':'/tmp/state','authority':'/tmp/unused'}
-        secrets={'MC_LOGIN_PASSWORD':'test','JEV_PERSONA_TOKEN':'t'*40,'OPENROUTER_API_KEY':'test'}
-        env=body_environment(cfg,secrets,Path('/tmp/run'),{},0,0)
-        self.assertEqual(env['JEV_PERSONA_NATIVE'],'1')
-        self.assertEqual(env['JEV_PERSONA_AUTONOMY'],'0')
-        self.assertEqual(env['JEV_COMMUNITY_SECONDS'],'0')
-        self.assertEqual(env['JEV_COMMUNITY_HTTP_LIMIT'],'0')
-        cfg['autonomous']=True
-        self.assertEqual(body_environment(cfg,secrets,Path('/tmp/run'),{},0,0)['JEV_PERSONA_AUTONOMY'],'1')
 
 
 class PlannerProcessTests(unittest.TestCase):

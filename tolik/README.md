@@ -23,7 +23,7 @@ HERMES_HOME="$PWD/.tolik/hermes" .tolik/hermes-source/.venv/bin/hermes auth add 
 ```
 
 Complete the official ChatGPT sign-in shown by Hermes. This uses the subscription
-provider with `gpt-6-luna`; there is no paid OpenAI API fallback. Jev still uses its separate
+provider; there is no paid OpenAI API fallback. Jev still uses its separate
 OpenRouter key. Hermes is pinned to revision
 `6b21d0564de0492e2ebd0d8f63fca86c03b5c892`.
 
@@ -44,73 +44,53 @@ are historical records, never new instructions. The character is the existing
 
 For a fresh installation, use `config.example.json` as `.tolik/config.json`,
 provide `.tolik/credentials.json` with `MC_LOGIN_PASSWORD`, `JEV_PERSONA_TOKEN`
-(at least 32 characters) and `OPENROUTER_API_KEY`. A mutation-authority file is
-required only for the optional restricted persona mode. For vision, set `asset_root` to a local 1.21.11 asset directory
+(at least 32 characters) and `OPENROUTER_API_KEY`, and an explicit valid native
+mutation-authority file. For vision, set `asset_root` to a local 1.21.11 asset directory
 with its manifest, or set `vision` to false. Client assets are not distributed here.
 This launcher uses the existing `TolikScheben` account
 on `mc.agicraft.ru`, Minecraft 1.21.11. It does not register or warp the account.
 
-## Native capabilities and human instructions
+## Editing scope and human instructions
 
-The standalone configuration enables `native_capabilities: true` and defaults
-to `autonomous: false`. Hermes sends structured obtain, craft, move, visit,
-come, follow, build and exact-edit goals to JevCraft. Native mechanics can gather
-the resources required for an assigned task. Digging and building remain available
-where the server allows them; there is no house-only boundary.
+`authority.server-permissions.json` is an opt-in example granting ordinary block
+digging and placement across all world coordinates in each dimension. Point
+`authority` at your selected local policy. Server protections still decide which
+actual actions succeed; a local grant does not bypass Minecraft permissions.
+The current installation uses this broader scope at the user's request, while
+retaining the existing project utility grants. Its previous policy is backed up
+under ignored `.tolik/backups/`.
 
-Directed mode waits between requests. It disables optional stockpiling,
-exploration, village visits and dream execution, including during another task.
-Immediate survival reactions remain enabled. Old memory does not authorize a
-new task after reconnect. Every model action must reference the latest verified
-operator message in the current session. Simple Russian/English stop, follow
-and come commands dispatch directly without waiting for Hermes inference.
+Set `operators` in local config to a player-name → server-UUID mapping. Incoming
+messages matching both receive `operator_instruction: true` in Hermes' context;
+other players cannot claim that status through message text. Current operator
+gameplay requests and corrections take priority over the character's own plans.
+This does not provide shell, file, credential or administration access.
 
-Free-text native requests are limited to exact `stop`, `status` and `resume`
-controls. This avoids interpreting a compound stop/build request as just stop.
-Two failed or blocked attempts pause the current request until a new operator
-message. Action-associated speech is sent only after the body accepts the action;
-acceptance still does not prove completion.
+Remaining limits are technical and configurable separately:
 
-Setting `autonomous: true` explicitly restores native idle preparation, dreams
-and the free-text interpreter. That path includes item lists, delivery, discovery,
-portals and Nether/End progression in addition to structured gameplay. The direct
-operator controls and failure pause above are specific to directed mode.
+- The persona action planner currently admits Overworld gameplay only.
+- Exact edits: up to 64 changed cells and 64 preserved cells within 16 blocks;
+  actual interaction requires 4.5-block eye reach. Basic full solid blocks and
+  ordinary grass/podzol/mycelium are supported. Stateful mechanisms, fluids,
+  gravity blocks and edits affecting unsupported neighbours can be refused.
+- Registered structures use the existing build/edit workflow. Fresh designs
+  are limited to 1,024 blocks, dimensions 24×16×24, 64 regions and the advertised
+  material palette; materials and usable paths must exist in Survival.
+- Local move targets are within 16 blocks; remembered-place visits within 96.
+  Longer travel requires multiple decisions. Goals have at most 120-second
+  leases; remembered-place visits have 60-second leases.
+- Broad dig/place permission does not grant arbitrary container contents or
+  entity attacks. Item use such as fluid buckets, ignition and complex block
+  interactions remains limited by supported tools.
+- Threat avoidance can interrupt work independently of Hermes. The launcher
+  stops below 10 health. Chat does not guarantee immediate cancellation of
+  native self-defence, and there is no standalone jump command yet.
+- Runs are capped at 10 minutes, 60 Hermes turns and 60 Jev HTTP attempts. One
+  Hermes turn times out after 60 seconds; chat is at most 240 characters.
+- Vision is simplified; community voice remains disabled/unverified by default.
 
-Removed in this mode: local land grants and packet mutation guards, the item
-allowlist, Overworld-only and low-health admission, carried-inventory-only
-crafting, 16/96-block travel limits, 64-cell edit limits, two-minute goal leases,
-one-minute visits, smaller persona construction caps and mandatory ten-minute /
-60-call run caps. Cancellation followed by
-inspection or replacement work executes in order; ordinary inventory changes
-no longer discard a new plan. New messages still supersede stale inference.
-
-Set `operators` in local config to a player-name → server-UUID mapping. Matching
-in-game requests supply the current task. Native server commands
-require a fresh addressed literal command from a configured operator's actual
-player-chat packet, and retain JevCraft's one-shot command authorization. The
-model cannot fabricate that packet; formatted server messages cannot authorize it.
-
-What still applies:
-
-- Minecraft/server permissions, loaded chunks, available resources, recipes,
-  reach, physics, and JevCraft's native pathfinding and survival decisions.
-- JevCraft's own schematic ceiling: 48×32×48, 256 regions, 12,000 blocks and its
-  supported material palette. Exact edits require observed current states and
-  cannot force unsupported states. Native travel to a remembered place requires
-  entering its dimension first.
-- One owner of body controls, session/cancellation checks, server-observed block
-  changes and truthful completion reporting. Generic native engine completion is
-  `complete_unverified` until independently observed; exact edit/build/arrival
-  verification remains available.
-- A 60-second timeout for an individual Hermes inference, bounded transport
-  payloads, short chat messages and serialized vision capture. These do not
-  terminate a running gameplay goal. Voice remains optional and unverified on
-  the community server.
-
-`native_capabilities: false` retains the previous restricted persona integration
-for callers that need it. `authority.server-permissions.json` belongs to that
-mode; native Tolik does not use its local grants. The prior local configuration
-and authority files are backed up under ignored `.tolik/backups/`.
+Freshness checks, exact target-state checks and server-observed completion remain
+enabled. Rejected actions are feedback, not proof of successful world changes.
 
 ## Run, inspect, stop
 
@@ -120,9 +100,8 @@ and authority files are backed up under ignored `.tolik/backups/`.
 .tolik/venv/bin/python -m tolik stop
 ```
 
-Without flags, `run` continues until stopped: `--seconds 0`, `--max-calls 0`
-and `--max-jev 0` mean no operator cap. Positive values set optional caps; the
-example above is a bounded interactive test. A bridge/lock check prevents duplicate controllers. Ctrl-C stops the owned planner and game body;
+Runs are bounded to 600 seconds and 60 Jev attempts at most. A bridge/lock check
+prevents duplicate controllers. Ctrl-C stops the owned planner and game body;
 it leaves the human Minecraft client running. The CLI prints the private run
 directory containing observations, exact planner inputs/results, body logs and
 summary. Memory persists across sessions. Incomplete or rejected work is never
@@ -160,11 +139,3 @@ voice transport and vision validation without model or public server calls.
 See `NOTICE.md` for source attribution and `../docs/tolik-hermes-design.md` for
 the architecture. [Live observations and limits](../docs/tolik-hermes-result-2026-11-07.md)
 are documented separately from test claims.
-
-The [recorded session analysis](../docs/tolik-session-analysis-2026-11-07.md)
-separates verified actions, wrapper failures and native survival behavior.
-The [native-mode update](../docs/tolik-native-capabilities-2026-11-07.md) records
-validation and the Luna switch. The later
-[directed-control update](../docs/tolik-directed-control-2026-11-07.md) documents
-the restored restrictions. Detailed session analysis remains local in ignored
-`.tolik/reports/tolik-luna-session-analysis-2026-11-07.md`.

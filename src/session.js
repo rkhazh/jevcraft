@@ -51,14 +51,11 @@ function unworkable(bot, spec) {
 }
 
 function createSession(config, client, { stateDirectory = path.join(__dirname, '..', '.bot-state'), recorder,
-  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false, personaLocalMove=false, personaVisit=false, personaCraftFromInventory=false, personaProfile=null, mutationPolicy=null, personaNative=false, personaAutonomous=true } = {}) {
+  runLedger = path.join(stateDirectory, 'run-ledger.md'), authenticate, rendezvous=null, personaVisiblePlayers=false, personaLocalMove=false, personaVisit=false, personaCraftFromInventory=false, personaProfile=null, mutationPolicy=null } = {}) {
   // Invalid configured identity fails before creating a connection. The
   // optional local profile does not delay reflexes on an HTTP handshake.
   if(personaProfile!==null&&!require('./persona-context').validProfile(personaProfile))throw new Error('Invalid configured persona profile');
   const externalPersona = process.env.JEV_PERSONA_MODE === '1';
-  const nativeCapabilities = externalPersona && personaNative === true;
-  const directedPersona = externalPersona && personaAutonomous !== true;
-  const holdIdle = externalPersona && (!nativeCapabilities || directedPersona);
   const identity = `${config.host}-${config.port}-${config.username}`.replace(/[^a-zA-Z0-9_-]/g, '_');
   const mutationWorldId=process.env.MC_WORLD_ID||identity;
   if(mutationPolicy!==null){
@@ -200,8 +197,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   const builds = new BuildRegistry(path.join(stateDirectory, `${memoryIdentity}-builds.json`));
   bot.buildRegistry = builds;
   if(externalPersona&&process.env.JEV_RESTORATION_AUTHORIZATION)bot._restorationPermit=require('./restoration-permit').loadRestorationAuthorization(process.env.JEV_RESTORATION_AUTHORIZATION,{worldId:pendingWorldId,consumptionDirectory:path.join(stateDirectory,'restoration-consumed'),sessionId:()=>persona?.sessionId,validGoal:goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId)});
-  bot._personaNativeCapabilities=nativeCapabilities;
-  if(externalPersona&&!nativeCapabilities)bot.loadPlugin(()=>require('./structure-mutations').installStructureMutationGuard(bot,{validGoal:goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId),record:event=>console.log(JSON.stringify({structureMutation:event}))}));
+  if(externalPersona)bot.loadPlugin(()=>require('./structure-mutations').installStructureMutationGuard(bot,{validGoal:goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId),record:event=>console.log(JSON.stringify({structureMutation:event}))}));
   // The goal store checkpoints placements during a lease. Recover that proof
   // after an interrupted process without resuming the expired goal itself.
   if (externalPersona && memorySeed?.personaGoalId && memorySeed.buildId && memorySeed.buildOwned && builds.find(memorySeed.buildId)) {
@@ -218,7 +214,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // began with the old one's portals and game progress.
   const world = new WorldKnowledge(new GoalStore(path.join(stateDirectory, `${memoryIdentity}-world.json`)),
     { seedFrom: memoryIdentity === identity ? [store.read(), idleStore.read()] : [] });
-  const mutationAuthority=nativeCapabilities||mutationPolicy===null?null:require('./mutation-authority').installMutationAuthority(bot,{policy:mutationPolicy,worldId:mutationWorldId,principal:config.username,world,isCurrent:()=>!ended&&gameplayAuthorized});
+  const mutationAuthority=mutationPolicy===null?null:require('./mutation-authority').installMutationAuthority(bot,{policy:mutationPolicy,worldId:mutationWorldId,principal:config.username,world,isCurrent:()=>!ended&&gameplayAuthorized});
   // The cost ledger: every Jev call charged to the request or dream it
   // served, kept per world, and summarized to run-ledger.md in the state directory when a run
   // ends. The client feeds it; the session only says which run is paying.
@@ -261,7 +257,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
   const saveGoal = goal => { if (!ended && (!goal.personaGoalId || persona?.valid(goal.personaGoalId))) { memory.recordGoal(goal, bot); world.harvest(goal); store.save(goal); } };
   const workStore = { save: goal => { saveGoal(goal); saveSurvival(); } };
-  if(externalPersona&&!nativeCapabilities){
+  if(externalPersona){
     bot._pendingWorkstations=()=>require('./persona-pending-work').stations(store.read(),{worldId:pendingWorldId,dimension:bot.game?.dimension});
     bot._checkPhysicalWorkCapacity=(additional=1)=>require('./persona-pending-work').capacity(store.read(),additional);
   }
@@ -302,8 +298,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
 
   function launch(goal) {
-    if (ended || (externalPersona && !(nativeCapabilities&&!directedPersona&&goal.dream) && (!goal.personaGoalId || !persona?.valid(goal.personaGoalId)))) return;
-    if(directedPersona)goal.personaHold=true;
+    if (ended || (externalPersona && (!goal.personaGoalId || !persona?.valid(goal.personaGoalId)))) return;
     world.hydrate(goal);
     memory.bind(goal);
     goal.memoryContext = memory.context(goal.from);
@@ -363,7 +358,6 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         return;
       }
       if (goal.personaGoalId) persona?.finish(goal.personaGoalId, goal.status, goal);
-      else if(nativeCapabilities&&goal.dream)persona?.emit({type:'native_work',status:goal.status,verified:false,kind:goal.kind,dream:goal.dream,request:goal.request,reason:goal.lastError||null});
       if (!goal.dream && ['complete', 'blocked'].includes(goal.status)) ledger.close(goal.ledgerRun, goal.status);
       // A custom dream is one request: done when it completes.
       if (goal.dream === 'custom' && goal.status === 'complete' && !ended) settleCustom(dreamStore.read(), goal);
@@ -404,12 +398,8 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // chooses the milestone from what code enumerates; a failure to choose or
   // an unusable answer falls back to ordinary idling until the cool-down ends.
   async function launchDream(standing) {
-    if (externalPersona&&(!nativeCapabilities||directedPersona)) return;
+    if (externalPersona) return;
     launchingDream = true;
-    const requestRevision=generation;
-    const dreamIdentity=value=>JSON.stringify([value?.dream,value?.setAt,value?.text,value?.paused,value?.clearedAt]);
-    const expectedDream=dreamIdentity(standing);
-    const currentDream=()=>!ended&&generation===requestRevision&&dreamIdentity(dreamStore.read())===expectedDream;
     try {
       if (standing.dream === 'custom') {
         noteCustomAttempt(standing, store.read()); saveDream(standing);
@@ -419,7 +409,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       const runId = dreamRun(standing);
       const next = await nextDreamRequest(withRun(client, runId), standing, { structures, shelf: require('./schematic-library').library(bot.registry), designer: designerAvailable(bot),
         interpretRequest: () => interpretDreamText(standing, runId) });
-      if (!currentDream() || active) return;
+      if (ended || active) return;
       if (standing.dream === 'custom') {
         if (next.kind === 'house' && designerAvailable(bot)) next.kind = 'build';
         const impossible = unworkable(bot, next);
@@ -440,7 +430,6 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       bot.chat(`Nothing needs me, so I'm chasing my dream to ${dreamTitle(standing)}${next.villageScore !== undefined && next.villageScore !== null ? ` (the village is ${Math.round(next.villageScore * 100 / 3)}% there)` : ''}${firstRung ? `. First: ${firstRung}.` : `: ${next.request}.`}`);
       launch(goal);
     } catch (err) {
-      if(!currentDream())return;
       console.error('[dream]', err.message);
       standing.lastAttemptAt = Date.now();
       // Only a text that would not come out as a doable request counts against
@@ -454,11 +443,11 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   }
 
   function launchIdle() {
-    const retained = holdIdle ? null : store.read();
-    const standing = holdIdle ? null : dreamStore.read();
+    const retained = externalPersona ? null : store.read();
+    const standing = externalPersona ? null : dreamStore.read();
     if (standing?.dream && !launchingDream && shouldLaunchDream(standing, retained, { ready: readyForDream(), resting: isSetAside(survival, 'dream_launch', standing.dream) })) { launchDream(standing); return; }
-    const goal = { ...(externalPersona ? {} : idleStore.read() || {}), version: 1, kind: 'survive', personaHold: holdIdle, ...(holdIdle?{step:{action:'persona_hold'}}:{}),
-      request: holdIdle ? 'Stay nearby between admitted persona goals; react to survival needs without optional resource gathering or exploration' : 'Stay alive and prepare supplies between player requests',
+    const goal = { ...(externalPersona ? {} : idleStore.read() || {}), version: 1, kind: 'survive', personaHold: externalPersona, ...(externalPersona?{step:{action:'persona_hold'}}:{}),
+      request: externalPersona ? 'Stay nearby between admitted persona goals; react to survival needs without optional resource gathering or exploration' : 'Stay alive and prepare supplies between player requests',
       retainedRequest: retained?.request, blueprint: retained?.blueprint, survival: survival.state,
       // A dream set aside is not chased by the idle loop either.
       dream: standing?.dream && !standing.satisfiedAt && !standing.paused ? standing.dream : undefined,
@@ -491,8 +480,8 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     }).finally(() => { if (active === session) active = null; });
   }
 
-  async function resume(revision = generation, options, personaSpec=null) {
-    if (externalPersona&&!personaSpec) return;
+  async function resume(revision = generation, options) {
+    if (externalPersona) return;
     if (active?.idle) await stop('interrupted');
     // The dream is what the bot does with nobody's work waiting. A player's
     // stopped or replaced request under it comes first; the dream picks up
@@ -511,7 +500,6 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     delete saved.waitingOn;
     if (saved.kind === 'build' && !saved.design) saved.designAttempts = 0;
     if (saved !== current) bot.chat(`Back to your earlier task: ${saved.request}.`);
-    if(personaSpec){delete saved.personaCraftPolicy;delete saved.personaCraftContinuation;delete saved.personaHold;delete saved.navigationOnly;Object.assign(saved,nativeMetadata(personaSpec));}
     launch(saved);
   }
   // The flight recording: what the bot sees and decides, for the audits.
@@ -541,31 +529,16 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     if (ready && !active && !relaunching && !launchingDream && !pendingRequests && !survival.state.paused && !survival.state.idleBlocked) launchIdle();
   }, 500);
 
-  function nativeMetadata(spec){
-    return {personaGoalId:spec.personaGoalId,personaSessionId:spec.personaSessionId,personaId:spec.personaId,personaWorldId:spec.personaWorldId,nativeCapabilities:true,...(directedPersona?{personaHold:true}:{})};
-  }
-  async function startNativeRequest(spec){
-    try {
-      const outcome=await handlePlayerRequest(null,spec);
-      if(persona.valid(spec.personaGoalId)&&active?.goal.personaGoalId!==spec.personaGoalId)
-        persona.finish(spec.personaGoalId,outcome?.status||'complete_unverified',{...spec,kind:'native',status:outcome?.status||'complete_unverified',lastError:outcome?.reason});
-    } catch(error) {
-      if(persona.valid(spec.personaGoalId))persona.finish(spec.personaGoalId,'blocked',{...spec,lastError:String(error.message).slice(0,400)});
-    }
-  }
-
-  function handlePlayerRequest(data, personaSpec=null, commandOnly=false) {
+  bot._client.on('playerChat', data => {
     if (ended) return;
-    const player = Object.values(bot.players).find(p => p.uuid === data?.sender);
-    if (!personaSpec&&(!player || player.username === bot.username || typeof data?.plainMessage !== 'string')) return;
-    const from = personaSpec ? (personaSpec.requester||personaSpec.from) : player.username;
-    let request = personaSpec ? `${bot.username} ${directedPersona?personaSpec.request.trim().toLowerCase():personaSpec.request}` : data.plainMessage;
-    if (externalPersona&&!personaSpec&&!commandOnly) return;
-    const respond=message=>personaSpec||commandOnly?persona.emit({type:'native_feedback',goal_id:personaSpec?.personaGoalId||null,message:String(message).slice(0,4000),verified:false}):bot.chat(message);
-    const blocked=(message,reason=message)=>{respond(message);return {status:'blocked',reason:String(reason).slice(0,400)};};
+    const player = Object.values(bot.players).find(p => p.uuid === data.sender);
+    if (!player || player.username === bot.username || typeof data.plainMessage !== 'string') return;
+    const from = player.username;
+    let request = data.plainMessage;
+    if (externalPersona) return;
     let literal;
     try { literal = requestedCommand(request, bot.username); }
-    catch (err) { console.error(err); return blocked('I could not use that command. Please check what you asked me to do.',err.message); }
+    catch (err) { console.error(err); bot.chat('I could not use that command. Please check what you asked me to do.'); return; }
     let address = parseAddress(request, bot.username);
     // Acknowledgements from other bots must never start new work. New goals
     // require an explicit name; short controls remain convenient when unprefixed.
@@ -600,16 +573,15 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     if (stopping) {
       invalidateRequests();
       stop().catch(console.error);
-      respond('Stopped. I saved our progress. Say "Jev resume" to keep going.');
+      bot.chat('Stopped. I saved our progress. Say "Jev resume" to keep going.');
       return;
     }
-    if (!ready) return blocked('Still loading the world; please repeat the request in a moment. Stop is available now.');
+    if (!ready) { bot.chat('Still loading the world; please repeat the request in a moment. Stop is available now.'); return; }
     // A literal status request reads local state immediately, even while a
     // previous natural-language request is waiting for a model response.
     if (/^status( please)?[.!?]?$/i.test(normalized)) {
-      respond(statusMessage(bot, active, store.read())); return;
+      bot.chat(statusMessage(bot, active, store.read())); return;
     }
-    if(directedPersona&&personaSpec&&normalized==='resume')return resume(generation,undefined,personaSpec);
     // Acknowledge instantly. Everything below can wait on the model, and a
     // motionless bot reads as "it did not hear me" rather than "it is thinking".
     bot.swingArm?.('right');
@@ -642,12 +614,10 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
           clarification: spec.clarification, interpretation: spec.interpretation, itemResolution: spec.itemResolution,
           discoveryResolution: spec.discoveryResolution, buildContinuation: spec.buildContinuation, usage: spec.usage, latencyMs: spec.latencyMs });
       }
-      if (revision !== generation || (personaSpec&&!persona.valid(personaSpec.personaGoalId))) return;
-      if(!spec)return blocked('The native interpreter returned no task.');
+      if (!spec || revision !== generation) return;
       if (spec.kind === 'operator_command') {
-        if(personaSpec)return blocked('Server commands require a fresh authorized player chat packet; a model request cannot impersonate one.');
         const allowed = (process.env.MC_COMMAND_USERS || '').split(',').map(name => name.trim().toLowerCase());
-        if (!allowed.includes(from.toLowerCase())) { respond(`${from} is not enabled for Jev's operator commands`); return; }
+        if (!allowed.includes(from.toLowerCase())) { bot.chat(`${from} is not enabled for Jev's operator commands`); return; }
         const resolution = literal ? { command: literal } : await classifyCommand(requestClient, bot, request, from);
         if (revision !== generation) return;
         const command = commandAccess.accept(data, { resolvedCommand: resolution.command, interpretation: { routing: spec.interpretation, command: resolution.judgments } });
@@ -663,22 +633,23 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         };
         bot.on('messagestr', collect);
         try {
-          respond(`Running your command once: ${command.command}`);
+          bot.chat(`Running your command once: ${command.command}`);
           command.dispatch();
           await new Promise(resolve => setTimeout(resolve, 1000));
         } finally { bot.removeListener('messagestr', collect); }
-        for (const reply of feedback) respond(`Command response: ${reply}`);
+        for (const reply of feedback) bot.chat(`Command response: ${reply}`);
         return;
       }
       if (spec.kind === 'status') {
-        respond(statusMessage(bot, active, store.read()));
+        bot.chat(statusMessage(bot, active, store.read()));
         return;
       }
       if (spec.kind === 'other') {
-        return blocked(spec.message||'Ask for items or a full set, a biome or creature to find, someone to follow, or a structure to build.');
+        bot.chat('Ask for items or a full set, a biome or creature to find, someone to follow, or a structure to build.');
+        return;
       }
       if (spec.kind === 'memory') {
-        respond(memory.handle(spec, { world: world.known }));
+        bot.chat(memory.handle(spec, { world: world.known }));
         if (active?.goal.from === from) active.goal.memoryContext = memory.context(from);
         observation?.sample('memory', { operation: spec.memory.operation });
         return;
@@ -690,24 +661,24 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         if (operation === 'set_custom') {
           // The text routes as a request; a survival route may still not exist for it.
           const impossible = unworkable(bot, spec.dream.probe);
-          if (impossible) return blocked(`I can't keep that as a dream. ${friendlyProblem(impossible)}`,impossible.message);
+          if (impossible) { bot.chat(`I can't keep that as a dream. ${friendlyProblem(impossible)}`); return; }
         }
         if (operation === 'query') {
-          respond(dreamReport(standing, store.read()));
+          bot.chat(dreamReport(standing, store.read()));
         } else if (operation === 'clear') {
           if (standing.ledgerRun) ledger.close(standing.ledgerRun, 'cleared');
           saveDream({ dream: null, clearedBy: from, clearedAt: new Date().toISOString() });
           if (active && !active.idle && active.goal.dream) await stop('cancelled');
-          respond('Okay, no dream for now. I\'ll just look after myself between requests.');
+          bot.chat('Okay, no dream for now. I\'ll just look after myself between requests.');
         } else if (operation === 'pause') {
-          if (!standing.dream) respond("I don't have a dream to set aside.");
+          if (!standing.dream) bot.chat("I don't have a dream to set aside.");
           else {
             saveDream({ ...standing, paused: true, pausedBy: from, pausedAt: new Date().toISOString() });
             if (active && !active.idle && active.goal.dream) await stop('interrupted');
-            respond(`Okay, I'll set my dream aside for now. Say "chase your dream" when you want me back on it.`);
+            bot.chat(`Okay, I'll set my dream aside for now. Say "chase your dream" when you want me back on it.`);
           }
         } else if (operation === 'resume') {
-          if (!standing.dream) respond(dreamReport(null));
+          if (!standing.dream) bot.chat(dreamReport(null));
           else {
             // Chasing a satisfied dream again is a new run; picking up a paused one is not.
             // A custom dream begins afresh from a resume: its earlier finish or failures are behind it.
@@ -717,7 +688,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
             // A stop paused the survival loop with everything else; taking the
             // dream up again takes that up too, or nothing would run it.
             survival.state.paused = false; saveSurvival();
-            respond(`Back to my dream: to ${title}.`);
+            bot.chat(`Back to my dream: to ${title}.`);
             const saved = store.read();
             if (saved?.dream && (standing.dream !== 'custom' || saved.dream === 'custom') && ['interrupted', 'cancelled', 'blocked'].includes(saved.status) && !active) {
               if (standing.dream === 'custom') saved.dreamSetAt = fresh.setAt ?? standing.setAt;
@@ -728,7 +699,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
           if (standing.ledgerRun && !standing.satisfiedAt) ledger.close(standing.ledgerRun, 'replaced');
           const text = spec.dream.text;
           saveDream({ dream: key, ...(key === 'custom' && { text }), setBy: from, setAt: new Date().toISOString(), ledgerRun: ledger.open({ kind: 'dream', name: dreamName(key, text) }).id });
-          respond(key === 'custom' ? `Got it. My dream is to ${text}. I'll do it once, whenever nothing else needs me.`
+          bot.chat(key === 'custom' ? `Got it. My dream is to ${text}. I'll do it once, whenever nothing else needs me.`
             : `Got it. My dream is to ${DREAMS[key].title}. I'll chase it whenever nothing else needs me.`);
         }
         observation?.sample('dream', { operation, key, standing: dreamStore.read() });
@@ -738,11 +709,11 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         const reason = spec.clarification?.reason;
         clarifying.set(from, { request: address.text, options: spec.clarification?.options, until: Date.now() + CLARIFY_MS,
           confirm: ['uncertain_interaction', 'dream_unsure'].includes(reason), which: ['no_item', 'no_discovery_target', 'ambiguous_item', 'incomplete_bundle'].includes(reason) });
-        return blocked(spec.message||spec.clarification?.reason||'The native interpreter needs clarification.');
+        bot.chat(spec.message); return;
       }
-      if (spec.kind === 'stop') { invalidateRequests(); await stop(); respond('Stopped.'); return; }
+      if (spec.kind === 'stop') { invalidateRequests(); await stop(); bot.chat('Stopped.'); return; }
       if (spec.kind === 'resume') {
-        await resume(revision,undefined,personaSpec); return;
+        await resume(revision); return;
       }
       // In Creative with the generative designer, a plain house is drawn like
       // any other building rather than taken from the built-in catalog.
@@ -751,10 +722,10 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       // work that can be done. "Get me bedrock" stopped a build, then was
       // parked as impossible, and the build had to be dug out with resume.
       const impossible = unworkable(bot, spec);
-      if (impossible) return blocked(`${friendlyProblem(impossible)}${active && !active.idle ? " I'll carry on with what I was doing." : ''}`,impossible.message);
+      if (impossible) { bot.chat(`${friendlyProblem(impossible)}${active && !active.idle ? " I'll carry on with what I was doing." : ''}`); return; }
       await stop('replaced');
       if (revision !== generation || ended) return;
-      const goal = { ...spec, ...(personaSpec?nativeMetadata(personaSpec):{}), ledgerRun: run.id, version: 1, status: 'pending', createdAt: new Date().toISOString(),
+      const goal = { ...spec, ledgerRun: run.id, version: 1, status: 'pending', createdAt: new Date().toISOString(),
         suspendedTasks: suspendPrevious(store.read()),
         requesterPosition: bot.players[from]?.entity ? { ...bot.players[from].entity.position } : null,
         initialInventory: bot.inventory.items().map(i => ({ name: i.name, count: i.count })) };
@@ -764,7 +735,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
           finish: `I'll carry on with ${spec.buildContinuation.name}.`,
           repair: `I'll look ${spec.buildContinuation.name} over and put right what is missing.`,
         }[spec.buildContinuation.mode];
-      respond(changing ? changing :
+      bot.chat(changing ? changing :
         spec.kind === 'build' ? "I'll make a plan, find a good spot, and build it for you." :
         spec.kind === 'bundle' ? `Working on the whole list: ${bundleSummary(spec)}.` :
         spec.kind === 'find' ? `I will look for ${spec.discoveryTarget.name.replaceAll('_', ' ')} and tell you where I find it.` :
@@ -775,15 +746,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         spec.kind === 'win' ? "Let's beat the dragon! I'll gather supplies and take it one step at a time." :
         "I'll get a Nether portal working, then go through to check it.");
       launch(goal); launched = true;
-    }).catch(err => { console.error(err); if (!ended && revision === generation) return blocked(intakeProblem(err),err.message); }).finally(() => { if (!launched) ledger.fold(run.id); pendingRequests--; });
-    return pending;
-  }
-  bot._client.on('playerChat', data => {
-    if(nativeCapabilities){
-      // The model never supplies this packet. Only the server's fresh addressed
-      // literal request can invoke the native one-shot command dispatcher.
-      try{if(requestedCommand(data.plainMessage,bot.username))handlePlayerRequest(data,null,true);}catch(error){console.error(error);}
-    }else handlePlayerRequest(data);
+    }).catch(err => { console.error(err); if (!ended && revision === generation) bot.chat(intakeProblem(err)); }).finally(() => { if (!launched) ledger.fold(run.id); pendingRequests--; });
   });
 
   bot.once('spawn', async () => {
@@ -885,7 +848,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     // of 2026-10-23 06:38:10Z ('the death event came again 1.4 s after the one recorded') and full-3's in the End at
     // 06:0xZ were never on disk; the survival file's last death stayed 04:55 and 04:54, and every question's recent deaths
     // and the bed kit's bare-death count with it.
-    for (const s of [store, survivalStore, idleStore, dreamStore, world.store]) { try { s.flushSync(); } catch (err) { console.error(`[bug] a store was not flushed at close: ${err.message}`); } }
+    for (const s of [store, survivalStore, idleStore,...(mutationAuthority?[world.store]:[])]) { try { s.flushSync(); } catch (err) { console.error(`[bug] a store was not flushed at close: ${err.message}`); } }
     // Fence late saves from this connection before a replacement reads state.
     ended = true;
     memory.flush();
@@ -920,21 +883,20 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     };
     const buildApi=require('./persona-build'), buildEnabled=process.env.JEV_PERSONA_BUILD==='1';
     const visitApi=require('./persona-visit'),visitEnabled=personaVisit===true;
-    const safeToLook=()=>ready&&!ended&&(!active||active.idle)&&(nativeCapabilities||(bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false))&&!['survival','vitals'].includes(bot._turn?.holder);
+    const safeToLook=()=>ready&&!ended&&(!active||active.idle)&&bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false&&!['survival','vitals'].includes(bot._turn?.holder);
     bot._personaVisitResolve=(id,principal)=>visitApi.resolveDestination(bot,id,{known:world.known,principal});
     persona = require('./persona-admission').createPersona({
-      nativeCapabilities,personaAutonomous:!directedPersona,
       decisionMode:process.env.JEV_PERSONA_DECISION_MODE==='continuing'?'continuing':'legacy',
       reaction:require('./persona-reaction').createPersonaReaction({client:contextual(()=>active?.goal),getPersona:()=>ended?null:persona,getGoal:()=>active?.goal,canObserve:()=>safeToLook()&&!visionCapturePending&&Date.now()-lastVisionCapture>=5000}),
-      rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,movementAffordances:()=>require('./persona-move').standingAffordances(bot,{enabled:personaLocalMove&&ready&&!ended}),checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove,nativeCapabilities}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
+      rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,movementAffordances:()=>require('./persona-move').standingAffordances(bot,{enabled:personaLocalMove&&ready&&!ended}),checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
         mutation_authority:require('./mutation-authority').mutationAuthoritySummary(bot),
         pending_edits:require('./persona-pending-work').advertiseEdits(store.read(),{worldId:pendingWorldId,personaId:persona?.actorProfile?.persona_id,dimension:bot.game?.dimension},bot),
-        edit_capabilities:{enabled:nativeCapabilities||(process.env.JEV_PERSONA_DECISION_MODE==='continuing'&&require('./mutation-authority').hasMutationAuthority(bot)),max_cells:nativeCapabilities?null:64,max_distance:nativeCapabilities?null:16,subset:nativeCapabilities?'native digging and supported block placement with exact-state checks':'stateless solid cubes and air; registered structures use existing build edit'},
+        edit_capabilities:{enabled:process.env.JEV_PERSONA_DECISION_MODE==='continuing'&&require('./mutation-authority').hasMutationAuthority(bot),max_cells:64,max_distance:16,subset:'stateless solid cubes and air; registered structures use existing build edit'},
         vision_capabilities:vision?.capabilities()||{enabled:false,look:false},
         execution:require('./persona-execution').executionSnapshot(bot,active),
         body_reports:require('./body-reports').tail(survival.state,process.env.MC_WORLD_ID||identity),
-        build_capabilities:buildApi.capabilities(bot,buildEnabled,nativeCapabilities),builds:buildApi.describeBuilds(bot),
+        build_capabilities:buildApi.capabilities(bot,buildEnabled),builds:buildApi.describeBuilds(bot),
         build_progress:active?.goal?.kind==='build'?{build_id:active.goal.buildId||null,phase:active.goal.buildPhase||active.goal.step?.action||'pending',placements_recorded:Object.keys(active.goal.buildOwned||{}).length,planned_blocks:active.goal.blueprint?.blocks?.length||null}:null,connected:ready && !ended,health:bot.health ?? 0,food:bot.food ?? 0,
         dimension:bot.game?.dimension || 'unknown',version:bot.version || null,bot_uuid:bot.player?.uuid || null,
         player_identities:ready && !ended ? require('./persona-roster').playerIdentities(bot) : [],
@@ -945,18 +907,18 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         players:Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).map(p=>p.username),
         inventory:(bot.inventory?.items() || []).reduce((out,i)=>{out[i.name]=(out[i.name]||0)+i.count;return out;},{})}),
       impossible:spec=>unworkable(bot,spec), stop:scopedStop,
-      craftAffordances:personaId=>({...require('./persona-craft').capabilities(bot,{enabled:!nativeCapabilities&&personaCraftFromInventory===true&&ready&&!ended}),pending_work:!nativeCapabilities&&personaCraftFromInventory===true&&ready&&!ended?require('./persona-pending-work').advertise(store.read(),{worldId:pendingWorldId,personaId,dimension:bot.game?.dimension}):[]}),
+      craftAffordances:personaId=>({...require('./persona-craft').capabilities(bot,{enabled:personaCraftFromInventory===true&&ready&&!ended}),pending_work:personaCraftFromInventory===true&&ready&&!ended?require('./persona-pending-work').advertise(store.read(),{worldId:pendingWorldId,personaId,dimension:bot.game?.dimension}):[]}),
       checkCraft:(spec,personaId,advertised)=>{
         const pending=require('./persona-pending-work'),saved=store.read(),context={worldId:pendingWorldId,personaId,dimension:bot.game?.dimension};
         const continuation=pending.prepare(saved,spec,context,advertised);if(continuation)return continuation;
         const plan=require('./persona-craft').plan(bot,spec);if(plan.some(s=>s.action==='smelt'))pending.capacity(saved);return true;
       },
-      visitAffordances:principal=>visitApi.capabilities(bot,{known:world.known,principal,enabled:visitEnabled&&ready&&!ended,nativeCapabilities}),
+      visitAffordances:principal=>visitApi.capabilities(bot,{known:world.known,principal,enabled:visitEnabled&&ready&&!ended}),
       resolveVisit:bot._personaVisitResolve,
       verifyVisit:goal=>visitApi.verifyVisit(bot,goal),
-      checkEdit:spec=>{if(!nativeCapabilities&&(process.env.JEV_PERSONA_DECISION_MODE!=='continuing'||!require('./mutation-authority').hasMutationAuthority(bot)))return false;const pending=require('./persona-pending-work'),saved=store.read(),resume=pending.adoptEdit(saved,spec,{worldId:pendingWorldId,personaId:persona?.actorProfile?.persona_id,dimension:bot.game?.dimension});if(!nativeCapabilities&&!resume)pending.capacity(saved);return require('./persona-edit').checkEdit(bot,spec,resume?.mechanical.editProgress,{nativeCapabilities});},
+      checkEdit:spec=>{if(process.env.JEV_PERSONA_DECISION_MODE!=='continuing'||!require('./mutation-authority').hasMutationAuthority(bot))return false;const pending=require('./persona-pending-work'),saved=store.read(),resume=pending.adoptEdit(saved,spec,{worldId:pendingWorldId,personaId:persona?.actorProfile?.persona_id,dimension:bot.game?.dimension});if(!resume)pending.capacity(saved);return require('./persona-edit').checkEdit(bot,spec,resume?.mechanical.editProgress);},
       verifyEdit:goal=>{if(!goal)return false;goal.editVerification=require('./persona-edit').verifyEdit(bot,goal);return goal.editVerification.verified;},
-      checkBuild:(spec,principal)=>!!buildApi.prepareBuild(bot,spec,principal,{enabled:buildEnabled,nativeCapabilities}),
+      checkBuild:(spec,principal)=>!!buildApi.prepareBuild(bot,spec,principal,{enabled:buildEnabled}),
       verifyBuild:goal=>{
         const report=buildApi.buildVerification(bot,goal);
         if(goal)goal.personaBuildVerification=report;
@@ -968,18 +930,16 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       start:async spec=>{
         await scopedStop(null,'interrupted');
         if (!persona.valid(spec.personaGoalId) || !ready || ended) throw new Error('Persona lease expired');
-        if(spec.kind==='native'){setImmediate(()=>{if(persona.valid(spec.personaGoalId))startNativeRequest(spec);});return;}
         if(spec.kind==='visit')visitApi.assertDestination(bot,spec,id=>bot._personaVisitResolve(id,spec.from));
-        const build=spec.kind==='build'?buildApi.prepareBuild(bot,spec,spec.from,{enabled:buildEnabled,nativeCapabilities}):{};
+        const build=spec.kind==='build'?buildApi.prepareBuild(bot,spec,spec.from,{enabled:buildEnabled}):{};
         const pending=require('./persona-pending-work'),previous=store.read();
         const resumedEdit=spec.kind==='edit'?pending.adoptEdit(previous,spec,{worldId:pendingWorldId,personaId:spec.personaId,dimension:bot.game?.dimension}):null;
         const resumed=spec.personaCraftContinuation?pending.adopt(previous,spec.personaCraftContinuation,{worldId:pendingWorldId,personaId:spec.personaId,dimension:bot.game?.dimension}):null;
-        const goal={...spec,...build,...(resumed?.mechanical||{}),...(resumedEdit?.mechanical||{}),...(spec.kind==='move'?{personaMovePolicy:{anchor:{...bot.entity.position},dimension:String(bot.game.dimension).replace(/^minecraft:/,''),nativeCapabilities}}:{}),version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:resumed?resumed.remaining:resumedEdit?resumedEdit.remaining:pending.retain(previous),requesterPosition:spec.requesterPosition||null,
+        const goal={...spec,...build,...(resumed?.mechanical||{}),...(resumedEdit?.mechanical||{}),...(spec.kind==='move'?{personaMovePolicy:{anchor:{...bot.entity.position},dimension:'overworld'}}:{}),version:1,status:'pending',createdAt:new Date().toISOString(),suspendedTasks:resumed?resumed.remaining:resumedEdit?resumedEdit.remaining:pending.retain(previous),requesterPosition:spec.requesterPosition||null,
           initialInventory:bot.inventory.items().map(i=>({name:i.name,count:i.count}))};
         saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
       },
     });
-    if(nativeCapabilities)bot.chat=message=>{if(ready&&!ended)persona.emit({type:'native_feedback',message:String(message).slice(0,4000),verified:false});return false;};
     persona.inspector=require('./persona-inspect').createInspector({bot,getSessionId:()=>ended?null:persona.sessionId,capture:captureVision,look:target=>vision.look(target),canView:()=>!!vision&&safeToLook()&&!visionCapturePending&&Date.now()-lastVisionCapture>=5000});
     persona.canInspect=query=>persona.inspector.canInspect(query);
     if(process.env.JEV_PERSONA_DECISION_MODE==='continuing')persona.actions=require('./persona-actions').createPersonaActions({client:contextual(()=>active?.goal),getPersona:()=>ended?null:persona});

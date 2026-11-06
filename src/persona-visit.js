@@ -21,9 +21,9 @@ function references(bot,{known={},principal}={}){
  return out;
 }
 function capabilities(bot,options={}){
- const here=position(bot.entity?.position),dim=dimension(bot.game?.dimension),enabled=options.enabled===true,nativeCapabilities=options.nativeCapabilities??bot._personaNativeCapabilities===true;
- const destinations=enabled&&here?references(bot,options).filter(d=>d.dimension===dim&&(nativeCapabilities||distance(here,d.position)<=MAX_DISTANCE)).sort((a,b)=>distance(here,a.position)-distance(here,b.position)||a.id.localeCompare(b.id)).slice(0,32):[];
- return {enabled,max_distance:nativeCapabilities?null:MAX_DISTANCE,arrival_distance:ARRIVAL_DISTANCE,timeout_seconds:nativeCapabilities?null:TIMEOUT_MS/1000,...(nativeCapabilities?{native_capabilities:true}:{}),route_prevalidated:false,destinations};
+ const here=position(bot.entity?.position),dim=dimension(bot.game?.dimension),enabled=options.enabled===true;
+ const destinations=enabled&&here?references(bot,options).filter(d=>d.dimension===dim&&distance(here,d.position)<=MAX_DISTANCE).sort((a,b)=>distance(here,a.position)-distance(here,b.position)||a.id.localeCompare(b.id)).slice(0,32):[];
+ return {enabled,max_distance:MAX_DISTANCE,arrival_distance:ARRIVAL_DISTANCE,timeout_seconds:TIMEOUT_MS/1000,route_prevalidated:false,destinations};
 }
 // Resolution deliberately does not use the nearest/truncated advertisement:
 // travel and new observations cannot evict an otherwise unchanged reference.
@@ -62,15 +62,7 @@ function verifyVisit(bot,goal,{resolve= id=>bot._personaVisitResolve?.(id,goal?.
  goal.visitArrival={destination_id:target.id,position:{...target.position},dimension:target.dimension,arrival_position:here,distance:near,arrival_distance:ARRIVAL_DISTANCE};
  return near<=ARRIVAL_DISTANCE&&safeFooting(bot);
 }
-async function visitStep(bot,task,goal,save,{resolve=id=>bot._personaVisitResolve?.(id,goal.from),navigate=require('./skills').navigate,boatTravel,now=Date.now}={}){
- if(goal.nativeCapabilities===true||bot._personaNativeCapabilities===true){
-  const checked=Object.create(task);checked.check=()=>{task.check();assertDestination(bot,goal,resolve);};
-  checked.check();
-  const arrived=await visitPlace(bot,checked,goal,save,{navigate,boatTravel});
-  checked.check();if(!arrived)return false;
-  if(!verifyVisit(bot,goal,{resolve}))throw blocked('Visit ended without observed near-arrival on safe current footing.');
-  save();return true;
- }
+async function visitStep(bot,task,goal,save,{resolve=id=>bot._personaVisitResolve?.(id,goal.from),navigate=require('./skills').navigate,now=Date.now}={}){
  const deadline=Number(goal.personaVisitPolicy?.startedAt)+TIMEOUT_MS;
  const checked=Object.create(task);
  checked.check=()=>{task.check();if(!Number.isFinite(deadline)||now()>=deadline)throw blocked('Visit deadline elapsed.');assertDestination(bot,goal,resolve);};

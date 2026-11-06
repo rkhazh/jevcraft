@@ -35,7 +35,7 @@ class Memory:
     def context(self,world,limit=24):
         # Filter before limiting: high-frequency scheduler records cannot erase memory.
         groups=(('chat','voice','speech','historical_conversation'),
-                ('goal','goal_ack','goal_proposed','native_work','native_feedback','historical_episode'),('historical_work',))
+                ('goal','goal_ack','goal_proposed','historical_episode'),('historical_work',))
         selected=[]
         for group in groups:
             placeholders=','.join('?' for _ in group)

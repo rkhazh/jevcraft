@@ -1,13 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const {idleBackgroundStep}=require('../src/persona-idle');
-test('directed work cannot divert into optional upkeep before following or building',async()=>{
- const bot={inventory:{items:()=>assert.fail('optional reserve scan must not run during directed work')}};
- for(const kind of ['follow','come','build','obtain']){
-  const offers=await require('../src/work').upkeepOffers(bot,{}, {kind,personaHold:true},()=>{});
-  assert.deepEqual(offers,{options:{},budget:null});
- }
-});
 test('persona hold still runs survival and never starts loot or optional work',async()=>{
  for(const survivalActs of [true,false]){
   const calls=[];const result=await idleBackgroundStep({hold:true,survive:async()=>{calls.push('survive');return survivalActs},loot:async()=>assert.fail('loot'),work:async()=>assert.fail('work'),stopMotion:()=>calls.push('stop')});

@@ -1,12 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const {TypeSafe}=require('../src/typesafe'),{AttemptBudget}=require('../src/attempt-budget');
-test('operator opt-in can remove the call cap while preserving attempt accounting',()=>{
- assert.throws(()=>new AttemptBudget(0));
- const rows=[],budget=new AttemptBudget(0,{unlimited:true,record:row=>rows.push(row)});
- for(let i=0;i<100;i++)budget.reserve();
- assert.equal(budget.used,100);assert.equal(rows.at(-1).attempt,100);
-});
 test('actual retry dispatches consume shared cap and stop before third fetch',async()=>{
  const old=global.fetch;let calls=0,exhausted=0;global.fetch=async()=>{calls++;return new Response('retry',{status:503})};
  try {const budget=new AttemptBudget(2,{onExhausted:()=>exhausted++});const c=new TypeSafe({provider:'openrouter',apiKey:'fake',maxRetries:4,attemptBudget:budget});await assert.rejects(c.exchange({state:{},questions:{}}),{name:'AttemptBudgetExceeded'});assert.equal(calls,2);assert.equal(budget.used,2);assert.equal(exhausted,1);} finally{global.fetch=old}

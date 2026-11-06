@@ -12,14 +12,13 @@ function safeStanding(bot,p){
  }
  return true;
 }
-function canMove(bot,target,{enabled=false,anchor=bot.entity?.position,nativeCapabilities=bot?._personaNativeCapabilities===true}={}){
- if(nativeCapabilities)return enabled&&!!anchor&&point(target)&&Math.abs(target.x)<=29999984&&Math.abs(target.z)<=29999984&&target.y>=(bot.game?.minY??-64)&&target.y<(bot.game?.minY??-64)+(bot.game?.height??384);
+function canMove(bot,target,{enabled=false,anchor=bot.entity?.position}={}){
  return enabled&&bot.game?.gameMode==='survival'&&dimension(bot)==='overworld'&&!!anchor&&point(target)&&Math.hypot(target.x-anchor.x,target.y-anchor.y,target.z-anchor.z)<=RANGE&&safeStanding(bot,target);
 }
-function standingAffordances(bot,{enabled=false,now=()=>Date.now()/1000,nativeCapabilities=bot?._personaNativeCapabilities===true}={}){
+function standingAffordances(bot,{enabled=false,now=()=>Date.now()/1000}={}){
  const result={observed_at:now(),standing_points:[],route_prevalidated:false,search_radius:8,vertical_range:2,block_read_limit:384,block_reads:0};
  const anchor=bot.entity?.position;
- if(!enabled||!anchor||![anchor.x,anchor.y,anchor.z].every(Number.isFinite)||!nativeCapabilities&&(bot.game?.gameMode!=='survival'||dimension(bot)!=='overworld'))return result;
+ if(!enabled||!anchor||![anchor.x,anchor.y,anchor.z].every(Number.isFinite)||bot.game?.gameMode!=='survival'||dimension(bot)!=='overworld')return result;
  const cache=new Map(),probe=Object.create(bot),found=[],seen=new Set();
  probe.blockAt=p=>{const key=`${p.x},${p.y},${p.z}`;if(cache.has(key))return cache.get(key);if(result.block_reads>=result.block_read_limit)return null;result.block_reads++;const block=bot.blockAt(p);cache.set(key,block);return block;};
  // Spatial coverage only, independent of goals, structures, materials or a route.
@@ -29,7 +28,7 @@ function standingAffordances(bot,{enabled=false,now=()=>Date.now()/1000,nativeCa
   for(const dy of [0,1,-1,2,-2]){
    const target={x,y:Math.floor(anchor.y)+dy,z},key=JSON.stringify(target);
    if(Math.abs(target.y-anchor.y)>2||Math.hypot(x-anchor.x,target.y-anchor.y,z-anchor.z)<=ARRIVAL||seen.has(key))continue;
-   if(canMove(probe,target,{enabled:true,anchor,nativeCapabilities})&&(!nativeCapabilities||safeStanding(probe,target))){found.push(target);seen.add(key);break;}
+   if(canMove(probe,target,{enabled:true,anchor})){found.push(target);seen.add(key);break;}
   }
  }
  const count=Math.min(12,found.length);
@@ -57,18 +56,6 @@ function localMovements(bot,policy){
 }
 async function moveStep(bot,task,goal,save,{timeoutMs=15000,checkIntervalMs=100}={}){
  task.check();const policy=goal.personaMovePolicy,p=goal.target;
- if(goal.nativeCapabilities===true||bot._personaNativeCapabilities===true){
-  const normalize=require('./memory').dimension;
-  if(!canMove(bot,p,{enabled:true,nativeCapabilities:true})||policy?.dimension&&normalize(bot.game?.dimension)!==normalize(policy.dimension))throw blocked('Native move target is invalid or its dimension changed');
-  const distance=()=>Math.hypot(bot.entity.position.x-p.x,bot.entity.position.y-p.y,bot.entity.position.z-p.z);
-  if(distance()<=ARRIVAL)return true;
-  const startedDimension=dimension(bot),checked=Object.create(task);
-  checked.check=()=>{task.check();if(dimension(bot)!==startedDimension)throw blocked('Move dimension changed');};
-  goal.step={action:'move',target:{...p},position:{...p}};save();
-  await require('./skills').navigate(bot,checked,new goals.GoalNear(p.x,p.y,p.z,1),{});
-  checked.check();if(distance()>ARRIVAL)throw blocked('Native move ended without verified arrival');
-  return true;
- }
  if(!policy||dimension(bot)!==policy.dimension||!canMove(bot,p,{enabled:true,anchor:policy.anchor}))throw blocked('Local move target is no longer safe, loaded or within its admitted bounds');
  const distance=()=>Math.hypot(bot.entity.position.x-p.x,bot.entity.position.y-p.y,bot.entity.position.z-p.z);
  if(distance()<=ARRIVAL)return true;

@@ -10,9 +10,5 @@
   "voice": false,
   "voice_send": false,
   "operators": {},
-  "voice_players": [
-    "SkipperBot"
-  ],
-  "native_capabilities": true,
-  "autonomous": false
+  "voice_players": ["SkipperBot"]
 }
