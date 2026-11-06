@@ -2,7 +2,7 @@
 const {Worker}=require('node:worker_threads'),{randomUUID}=require('node:crypto'),fs=require('node:fs'),path=require('node:path'),{Vec3}=require('vec3');
 const fail=code=>{throw Object.assign(new Error(code),{code})};
 const point=p=>p&&[p.x,p.y,p.z].every(Number.isFinite)?{x:p.x,y:p.y,z:p.z}:null;
-function installPersonaVision(bot,{assetRoot=path.resolve(__dirname,'../../setup/jevcraft-community/vision-assets/1.21.11'),sessionId,worldId,ready,safeToLook,activeGoalId,range=24,workerFactory=()=>new Worker(path.join(__dirname,'persona-vision-worker.js'))}={}){
+function installPersonaVision(bot,{assetRoot=process.env.JEV_VISION_ASSET_ROOT||path.resolve(__dirname,'../../setup/jevcraft-community/vision-assets/1.21.11'),sessionId,worldId,ready,safeToLook,activeGoalId,range=24,workerFactory=()=>new Worker(path.join(__dirname,'persona-vision-worker.js'))}={}){
  let worker=null,busy=false,closed=false,last=-Infinity,lastLook=-Infinity,looking=false,generation=0;
  let assetsReady=false;try{assetsReady=JSON.parse(fs.readFileSync(path.join(assetRoot,'manifest.json'))).version==='1.21.11'}catch{}
  const available=()=>assetsReady&&bot.version==='1.21.11'&&!closed;

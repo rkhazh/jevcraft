@@ -33,6 +33,9 @@ artifacts/
 # Local tooling and logs
 .claude/
 logs/
+.tolik/
+__pycache__/
+*.pyc
 
 # Written by bots started before the ledger moved to .bot-state/
 docs/run-ledger.md

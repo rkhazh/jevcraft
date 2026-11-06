@@ -1,0 +1,5 @@
+Pillow==11.3.0
+python-dotenv==1.1.1
+requests==2.34.2
+cryptography==46.0.7
+gradio-client==1.13.3

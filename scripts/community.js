@@ -20,7 +20,7 @@ async function main(){
  const password=process.env.MC_LOGIN_PASSWORD;
  for(const method of ['log','warn','error']){const original=console[method];console[method]=(...args)=>original(...args.map(x=>String(x).split(password).join('[redacted]')));}
  fs.mkdirSync(directory,{recursive:false,mode:0o700});
- const stateDirectory=require('../src/community-profile').communityStateDirectory(profile.character,directory);
+ const stateDirectory=require('../src/community-profile').communityStateDirectory(profile.character,directory,undefined,process.env.JEV_COMMUNITY_STATE_DIRECTORY||null);
  fs.mkdirSync(stateDirectory,{recursive:true,mode:0o700});
  // Lock profile options even if the shell inherited local experiment settings.
  Object.assign(process.env,{JEV_SVC_ENABLED:process.env.JEV_SVC_ENABLED==='1'?'1':'0',JEV_SVC_PROTOCOL:'20',JEV_PROVIDER:'openrouter',OPENROUTER_JEV_MODEL:'typesafe/jev-1.14',MC_WORLD_ID:profile.worldId,JEV_PERSONA_MODE:'1',JEV_PERSONA_BUILD:profile.build?'1':'0',JEV_NO_QUIET_RESTART:'1',MC_COMMAND_USERS:'',JEV_PERSONA_PLAYERS:rendezvous?.target||'',JEV_PERSONA_PORT:String(profile.port)});

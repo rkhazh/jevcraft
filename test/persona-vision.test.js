@@ -2,6 +2,15 @@
 const test=require('node:test'),assert=require('node:assert/strict'),{PNG}=require('pngjs'),{EventEmitter}=require('node:events'),{Vec3}=require('vec3');
 const {render,rayBox}=require('../src/persona-vision-worker'),{installPersonaVision}=require('../src/persona-vision');
 function scene(){const size=9,min=[-4,-4,-4],grid=new Int32Array(size**3);const set=(x,y,z,value)=>grid[((y+4)*size+z+4)*size+x+4]=value;return {set,data:{width:32,height:20,range:4,eye:[.5,.5,.5],yaw:0,pitch:0,min,size,grid:grid.buffer,fov:60,types:[null,{name:'stone',shapes:[[0,0,0,1,1,1]],properties:{}}],assetRoot:'/nonexistent'}};}
+test('standalone assets are selected from the explicit runtime environment',()=>{
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'tolik-assets-'));
+ fs.writeFileSync(path.join(dir,'manifest.json'),JSON.stringify({version:'1.21.11'}));
+ const previous=process.env.JEV_VISION_ASSET_ROOT;
+ const bot=new EventEmitter();bot.version='1.21.11';
+ try{process.env.JEV_VISION_ASSET_ROOT=dir;assert.equal(installPersonaVision(bot,{ready:()=>true}).capabilities().enabled,true);
+ process.env.JEV_VISION_ASSET_ROOT='/not-present-tolik-assets';assert.equal(installPersonaVision(bot,{ready:()=>true}).capabilities().enabled,false);}
+ finally{bot.emit('end');if(previous===undefined)delete process.env.JEV_VISION_ASSET_ROOT;else process.env.JEV_VISION_ASSET_ROOT=previous;fs.rmSync(dir,{recursive:true,force:true});}
+});
 test('known geometry with absent textures reports rendering loss separately from unloaded world',()=>{
  const s=scene();s.set(0,0,-2,1);const r=render(s.data);
  assert.equal(r.unknownPixels,0);assert.ok(r.missingTexturePixels>0);
