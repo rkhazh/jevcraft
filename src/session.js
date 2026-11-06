@@ -891,6 +891,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,movementAffordances:()=>require('./persona-move').standingAffordances(bot,{enabled:personaLocalMove&&ready&&!ended}),checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
         mutation_authority:require('./mutation-authority').mutationAuthoritySummary(bot),
+        edit_capabilities:{enabled:process.env.JEV_PERSONA_DECISION_MODE==='continuing'&&require('./mutation-authority').hasMutationAuthority(bot),max_cells:64,max_distance:16,subset:'stateless solid cubes and air; registered structures use existing build edit'},
         vision_capabilities:vision?.capabilities()||{enabled:false,look:false},
         execution:require('./persona-execution').executionSnapshot(bot,active),
         body_reports:require('./body-reports').tail(survival.state,process.env.MC_WORLD_ID||identity),
@@ -914,6 +915,8 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       visitAffordances:principal=>visitApi.capabilities(bot,{known:world.known,principal,enabled:visitEnabled&&ready&&!ended}),
       resolveVisit:bot._personaVisitResolve,
       verifyVisit:goal=>visitApi.verifyVisit(bot,goal),
+      checkEdit:spec=>process.env.JEV_PERSONA_DECISION_MODE==='continuing'&&require('./mutation-authority').hasMutationAuthority(bot)&&require('./persona-edit').checkEdit(bot,spec),
+      verifyEdit:goal=>{if(!goal)return false;goal.editVerification=require('./persona-edit').verifyEdit(bot,goal);return goal.editVerification.verified;},
       checkBuild:(spec,principal)=>!!buildApi.prepareBuild(bot,spec,principal,{enabled:buildEnabled}),
       verifyBuild:goal=>{
         const report=buildApi.buildVerification(bot,goal);

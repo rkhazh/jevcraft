@@ -10815,6 +10815,10 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
         const ran = await inCatch(task, goal, () => gameHandlers(bot, decisionClient).corpse_run(bot, task, goal, save));
         if (ran) { goal.stalls = 0; save(); onStep(goal); continue; }
       }
+      if (goal.kind === 'edit') {
+        if(await require('./persona-edit').executeEdit(bot,goal,{task,save:()=>{save();store.flushSync?.();}})){goal.status='complete';goal.completedAt=new Date().toISOString();save();onStep(goal);return {ok:true,goal};}
+        onStep(goal);continue;
+      }
       if (goal.kind === 'move') {
         await require('./persona-move').moveStep(bot,task,goal,save);
         goal.status='complete';goal.completedAt=new Date().toISOString();save();onStep(goal);return {ok:true,goal};
@@ -10897,7 +10901,7 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
     } catch (err) {
       task.interruptCheck = undefined;
       if(require('./persona-craft').restricted(goal)&&!['NeedsAir','NeedsSafety','Cancelled'].includes(err.name))throw err.personaCraftTerminal?err:require('./persona-craft').blocked(err.message);
-      if(err.personaMoveTerminal || err.personaBuildTerminal || err.personaVisitTerminal || err.code==='pending_work_capacity')throw err;
+      if(err.personaEditTerminal || err.personaMoveTerminal || err.personaBuildTerminal || err.personaVisitTerminal || err.code==='pending_work_capacity')throw err;
       // Thrown before a layer said it had the turn: the one that was
       // running (not bot._turn, which the hunt marks before it looks).
       turnShadow?.gave(layerNow);

@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === [...keys].sort().join();
 const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v) ? v.map(x=>JSON.parse(stable(x))) : Object.fromEntries(Object.keys(v).sort().map(k=>[k,JSON.parse(stable(v[k]))]))) : v);
-function createPersona({read, start, stop, reaction=null, decisionMode='legacy', impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({}),visitAffordances=()=>({enabled:false,destinations:[]}),resolveVisit=()=>null,verifyVisit=()=>false,craftAffordances=()=>({enabled:false,items:[]}),checkCraft=()=>false}) {
+function createPersona({read, start, stop, reaction=null, decisionMode='legacy', impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({}),visitAffordances=()=>({enabled:false,destinations:[]}),resolveVisit=()=>null,verifyVisit=()=>false,craftAffordances=()=>({enabled:false,items:[]}),checkCraft=()=>false,checkEdit=()=>false,verifyEdit=()=>false}) {
  rendezvous=require('./persona-rendezvous').validateRendezvous(rendezvous);
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
  let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve(), actorProfile=null, sharedMemory=null;
@@ -47,7 +47,7 @@ function createPersona({read, start, stop, reaction=null, decisionMode='legacy',
    execution:{kind:spec.kind,request:safeText(goal?.request||spec.request),step:normalizeStep(goal?.step||{})},
    ...(goal?.buildId?{build_id:goal.buildId}:{}),
    ...(goal?.personaBuildVerification?{build_verification:goal.personaBuildVerification}:{}),
-   ...(goal?.visitArrival?{visit_arrival:goal.visitArrival}:{})};
+   ...(goal?.visitArrival?{visit_arrival:goal.visitArrival}:{}),...(goal?.editVerification?{edit_verification:goal.editVerification}:{})};
  }
  async function cancelNow(id, status='cancelled') {
   if(!active || active.proposal.goal_id!==id)return {status:'ignored',goal_id:id};
@@ -89,6 +89,7 @@ function createPersona({read, start, stop, reaction=null, decisionMode='legacy',
    if(!Number.isFinite(d)||dim!==current.dimension||d>api.MAX_DISTANCE)return 'unsupported_visit';
    if(d<=api.ARRIVAL_DISTANCE)return 'already_near_visit_destination';
   }
+  else if(s?.kind==='edit'){try{if(!checkEdit(s))return 'unsupported_edit';}catch(error){return {reason:'edit_not_admissible',detail:String(error.message).slice(0,240)};}}
   else if(s?.kind==='build') {
    if(!exact(s,['kind','request','mode','build_id','schematic',...(Object.hasOwn(s,'site_binding')?['site_binding']:[])])||typeof s.request!=='string'||!s.request.trim()||s.request.length>800||/[\p{Cc}\p{Cf}]/u.test(s.request)||!['fresh','finish','repair','edit'].includes(s.mode)||(s.build_id!==null&&(typeof s.build_id!=='string'||s.build_id.length>128)))return 'unsupported_spec';
    try{if(!checkBuild(s,`persona:${p.persona_id}`))return 'unsupported_build';}catch(err){if(!err.code&&typeof err.validationDetail==='string')return {reason:'invalid_build_geometry',detail:err.validationDetail.replace(/[\p{Cc}\p{Cf}]/gu,' ').slice(0,240)};return err.code||'invalid_build_geometry';}
@@ -147,13 +148,14 @@ function createPersona({read, start, stop, reaction=null, decisionMode='legacy',
      verified=!!here&&!!there&&Math.hypot(here.x-there.x,here.y-there.y,here.z-there.z)<=3;
     }
     if(s.kind==='move'){const p=state.position;verified=!!p&&['overworld','minecraft:overworld'].includes(state.dimension)&&Math.hypot(p.x-s.target.x,p.y-s.target.y,p.z-s.target.z)<=1.5&&checkMove(s.target);}
+    if(s.kind==='edit')verified=!!verifyEdit(goal);
     if(s.kind==='build')verified=!!verifyBuild(goal);
     if(s.kind==='visit')verified=!!verifyVisit(goal);
     if(!verified)status='failed';
    }
    if(!['complete','blocked','failed'].includes(status))return;
    const details=terminalDetails(s,goal);
-   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,...details,summary:verified?(s.kind==='build'?(goal.personaBuildVerification?.retained_blocks?`Verified structure ${goal.buildId} with ${goal.personaBuildVerification.retained_blocks} observed retained enclosed original natural foundation cells; not an exact material match`:`Verified all planned structure blocks and clear cells for ${goal.buildId}`):s.kind==='move'?`Observed arrival within 1.5 blocks of requested local point`:s.kind==='visit'?`Observed arrival within 3 blocks of the last-known destination reference; current existence and access unverified`:s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}${details.reason?`: ${details.reason}`:""}`});
+   clearTimeout(active.timer);active=null;emit({type:'goal',goal_id:id,status,verified,...details,summary:verified?(s.kind==='edit'?'Observed all exact edit targets and preserved cells':s.kind==='build'?(goal.personaBuildVerification?.retained_blocks?`Verified structure ${goal.buildId} with ${goal.personaBuildVerification.retained_blocks} observed retained enclosed original natural foundation cells; not an exact material match`:`Verified all planned structure blocks and clear cells for ${goal.buildId}`):s.kind==='move'?`Observed arrival within 1.5 blocks of requested local point`:s.kind==='visit'?`Observed arrival within 3 blocks of the last-known destination reference; current existence and access unverified`:s.kind==='come'?`Observed arrival within 3 blocks of ${s.target}`:`Observed at least ${s.count} ${s.item} in inventory`):`Goal ${status}${details.reason?`: ${details.reason}`:""}`});
   },
   close:()=>{closed=true;return enqueue(async()=>{if(active)await cancelNow(active.proposal.goal_id,'cancelled');});},
  };

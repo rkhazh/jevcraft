@@ -25,7 +25,7 @@ function installExpectationFence(bot){
    if(!scope||scope.bot!==bot)return write.call(this,name,packet);
    const operation=name==='block_dig'&&[0,2].includes(packet.status)?'dig':name==='block_place'?'place':null;
    if(!operation)return write.call(this,name,packet); // Dig cancellation remains available.
-   try{checkExpectation(scope,bot,operation,packet.location);}
+   try{const offsets=[[0,-1,0],[0,1,0],[0,0,-1],[0,0,1],[-1,0,0],[1,0,0]];const d=operation==='place'?offsets[packet.direction]:null;const location=d?new Vec3(packet.location.x+d[0],packet.location.y+d[1],packet.location.z+d[2]):packet.location;checkExpectation(scope,bot,operation,location);}
    catch(error){
     scope.error=error;const dispatch=dispatches.getStore();if(dispatch?.bot===bot)dispatch.error=error;
     if(operation==='dig'&&packet.status===2){try{bot.stopDigging?.();}catch(_){}return false;}
@@ -46,7 +46,7 @@ function installExpectationFence(bot){
 // Validation only: this never creates a build permit or changes the ordinary
 // registered-structure check. Equip/look/timer waits all retain this scope.
 async function withMutationExpectation(bot,{operation,position,name,stateId,check},run){
- if(operation!=='dig'||!position||!['x','y','z'].every(k=>Number.isInteger(position[k]))||typeof name!=='string'||!Number.isInteger(stateId)||stateId<0||check!==undefined&&typeof check!=='function')throw new Error('An exact dig position, material and state are required');
+ if(!['dig','place'].includes(operation)||!position||!['x','y','z'].every(k=>Number.isInteger(position[k]))||typeof name!=='string'||!Number.isInteger(stateId)||stateId<0||check!==undefined&&typeof check!=='function')throw new Error('An exact dig position, material and state are required');
  installExpectationFence(bot);
  const p=new Vec3(position.x,position.y,position.z),scope={bot,client:bot._client,dimension:bot.game?.dimension,operation,cell:key(p),name,stateId,check,parent:expectations.getStore(),active:true,error:null};
  checkExpectation(scope,bot,operation,p);
