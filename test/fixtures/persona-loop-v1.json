@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "session_id": "s",
+  "world_id": "w",
+  "persona_id": "p",
+  "generation": 1,
+  "context_revision": 1,
+  "observation_id": "o",
+  "observed_at": 100,
+  "dependencies": {
+    "active_goal_id": null
+  },
+  "blockers": [],
+  "candidates": [
+    {
+      "id": "s:wait",
+      "kind": "wait",
+      "args": {
+        "seconds": 5
+      },
+      "source_ids": [],
+      "dependencies": {},
+      "expected": "wake",
+      "cost": {},
+      "expires_at": 115
+    }
+  ]
+}
