@@ -43,9 +43,17 @@ async function startPersonaTransport({getSession,token,port=8766}){
    if(req.method==='GET'&&url.pathname==='/events'){
     const after=Number(url.searchParams.get('after')||0);if(!Number.isSafeInteger(after)||after<0)return reply(400,{error:'invalid_cursor'});return reply(200,api.events(after));
    }
-   if(req.method!=='POST'||!['/goal','/cancel','/chat','/voice/state','/look','/persona-profile','/persona-context','/reaction'].includes(url.pathname))return reply(404,{error:'not_found'});
+   if(req.method!=='POST'||!['/goal','/cancel','/chat','/voice/state','/look','/persona-profile','/persona-context','/reaction','/persona-action/choose'].includes(url.pathname))return reply(404,{error:'not_found'});
    let size=0, chunks=[];for await(const chunk of req){size+=chunk.length;if(size>32768){reply(413,{error:'payload_too_large'});req.resume();return;}chunks.push(chunk);}
    const data=parseStrict(Buffer.concat(chunks).toString('utf8'));
+   if(url.pathname==='/persona-action/choose'){
+    const id=req.headers['x-persona-session'];
+    if(id!==api.sessionId||getSession()?.persona!==api)return reply(409,{error:'stale_session'});
+    if(!api.actions)return reply(409,{error:'continuing_unavailable'});
+    const selected=await api.actions.choose(data);
+    if(getSession()?.persona!==api)return reply(409,{error:'stale_session'});
+    return reply(200,selected);
+   }
    if(url.pathname==='/reaction'){
     const id=req.headers['x-persona-session'];
     if(id!==api.sessionId||getSession()?.persona!==api)return reply(409,{error:'stale_session'});

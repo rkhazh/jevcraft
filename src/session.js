@@ -934,6 +934,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         saveGoal(goal);store.flushSync();setImmediate(()=>launch(goal));
       },
     });
+    if(process.env.JEV_PERSONA_DECISION_MODE==='continuing')persona.actions=require('./persona-actions').createPersonaActions({client:contextual(()=>active?.goal),getPersona:()=>ended?null:persona});
     if(personaProfile!==null)persona.setProfile(personaProfile,persona.sessionId);
     if(process.env.JEV_VISION_ENABLED==='1')vision=require('./persona-vision').installPersonaVision(bot,{sessionId:()=>persona.sessionId,worldId:pendingWorldId,ready:()=>ready&&!ended,activeGoalId:()=>active?.goal?.personaGoalId||null,safeToLook});
     require('./persona-chat').installPersonaChat(bot,{community:config.host==='mc.agicraft.ru'&&Number(config.port)===25565,ready:()=>ready&&!ended,emit:event=>persona.emit(event)});

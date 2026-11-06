@@ -119,7 +119,7 @@ function createPersona({read, start, stop, reaction=null, impossible=()=>false, 
   if(!valid(p.goal_id)){await cancelNow(p.goal_id,'expired');return rejection(p,'expired');}
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:expiresAt};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
  }
- return {get sessionId(){return sessionId;},snapshot,valid,emit,submit:p=>enqueue(()=>submitNow(p)),cancel:id=>enqueue(()=>cancelNow(id)),
+ return {get sessionId(){return sessionId;},snapshot,valid,emit,canPropose:spec=>{const s=snapshot();return check({schema_version:1,goal_id:randomUUID(),persona_id:actorProfile?.persona_id||'unknown',session_id:sessionId,observation_id:s.observation_id,issued_at:s.observed_at,expires_at:s.observed_at+60,state:'proposed',spec});},submit:p=>enqueue(()=>submitNow(p)),cancel:id=>enqueue(()=>cancelNow(id)),
   ...(typeof reaction==='function'?{react:reaction}:{}),
   get actorProfile(){return !closed&&actorProfile?structuredClone(actorProfile):null;},setProfile,
   get sharedContext(){const now=Date.now()/1000;return !closed&&sharedMemory&&sharedMemory.observed_at<=now+1&&now-sharedMemory.observed_at<=30?structuredClone(sharedMemory):null;},setSharedContext,
