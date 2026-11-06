@@ -9075,7 +9075,7 @@ class Survival {
   // there is none (the decision audit, 2026-09-25).
   shaftColumn({ radius = 4 } = {}) {
     const bot = this.bot;
-    if (require('./shaft-retreat').descentBlocked(bot, this.state)) return { none: 'The escape shaft already used this encounter has a recorded return route; another descent would deepen it', resting: true, spot: `${feetCell(bot).x},${feetCell(bot).z}` };
+    if (require('./shaft-retreat').descentBlocked(bot, this.state)) return { none: 'The escape-shaft attempt is already reserved for this encounter; another descent is unavailable', resting: true, spot: `${feetCell(bot).x},${feetCell(bot).z}` };
     // No pickaxe (respawned with nothing, at night, beside the mobs that
     // killed it: the clean run died there a second time gathering dirt for
     // a shelter): the shaft still goes down where every block in it digs by
@@ -9095,16 +9095,24 @@ class Survival {
     // The shelter's own test, but for the one cell over the head, which the
     // shaft opens and the cap closes.
     const walled = feet => shelter.missingShell(bot, { origin: feet }).every(p => p.equals(feet.offset(0, 2, 0)));
+    let permissionBlocked = false;
+    const permitted = cell => {
+      if (bot.blockAt(cell)?.boundingBox !== 'block') return true;
+      if (!require('./structure-mutations').routeMutatesStructure(bot, { toBreak: [cell] })) return true;
+      permissionBlocked = true; return false;
+    };
     // Look before digging: the whole column must be dry, or none of it is
     // dug. The bottom of the first column that works, or null.
     const columnBottom = top => {
       const first = top.offset(0, -1, 0);
       if (!bot.blockAt(first) || bot.blockAt(first).boundingBox !== 'block' || wet(first) || sides(first).some(wet)) return null;
+      if (!permitted(first)) return null;
       if (!pick && !handSoft(bot.blockAt(first))) return null;
       for (let depth = 2; depth <= 12; depth++) {
         const cell = top.offset(0, -depth, 0);
         const b = bot.blockAt(cell), under = bot.blockAt(cell.offset(0, -1, 0));
         if (!b || !under || b.name === 'bedrock' || wet(cell) || wet(cell.offset(0, -1, 0)) || /lava|magma/.test(under.name)) return null;
+        if (!permitted(cell)) return null;
         if (!pick && b.boundingBox === 'block' && !handSoft(b)) return null;
         if (sides(cell).some(wet) || sides(cell.offset(0, 1, 0)).some(wet)) return null;
         if (walled(cell)) return cell;
@@ -9123,7 +9131,7 @@ class Survival {
       const found = columnBottom(top);
       if (found) return { start: top, bottom: found, spot };
     }
-    return { none: `no dry column here: every one within four blocks meets water, lava or bedrock${pick ? '' : ', or rock too hard to dig by hand,'} before it is walled in, twelve blocks down at most`, spot };
+    return { none: permissionBlocked ? 'No usable shaft column: a required dig lacks current mutation permission' : `no dry column here: every one within four blocks meets water, lava or bedrock${pick ? '' : ', or rock too hard to dig by hand,'} before it is walled in, twelve blocks down at most`, spot };
   }
 
   async digShaft(task, goal, save, { start, bottom, spot, here, stance = false }) {
@@ -9178,8 +9186,9 @@ class Survival {
       return onColumn();
     };
     const offColumn = () => { this.state.stanceWhy = 'knocked off the shaft\'s column and could not step back over it'; setAside(this, 'shaft_pocket', spot, this.state.stanceWhy, 30000); save(); return false; };
-    if (!require('./shaft-retreat').begin(bot, this.state, start, bottom)) return false;
-    save(); // Persist the original entry and spent excavation before the first dig.
+    const shaftRetreat = require('./shaft-retreat').begin(bot, this.state, start, bottom);
+    if (!shaftRetreat) return false;
+    save(); // Persist the original entry and reserved attempt before the first dig.
     try {
     this.report(goal, save, { action: 'shaft_pocket', from: { ...start }, to: { ...bottom } });
     for (let y = start.y - 1; y >= bottom.y; y--) {
@@ -9189,7 +9198,18 @@ class Survival {
       if (shotAt()) return shooting();
       if (!await backOn()) return offColumn();
       const c = new Vec3(start.x, y, start.z);
-      if (bot.blockAt(c)?.boundingBox === 'block') await this.actions.dig(bot, task, c, { requireDrops: false, dropInto: true });
+      const block = bot.blockAt(c);
+      if (block?.boundingBox === 'block') {
+        const listen = require('./server-truth').hear(bot, c, block.stateId);
+        try { await this.actions.dig(bot, task, c, { requireDrops: false, dropInto: true }); }
+        finally {
+          // Cancellation can arrive after the server removed the block but
+          // before the dig returns. Local optimistic air is not this receipt.
+          const changed = listen.heard(true);
+          listen.stop();
+          if (changed) { shaftRetreat.excavationUsed = true; save(); }
+        }
+      }
       if (!await backOn()) return offColumn();
       for (let i = 0; i < 20 && bot.entity.position.y > y + 0.1; i++) { task.check(); await sleep(50); }
     }
@@ -9209,9 +9229,13 @@ class Survival {
     if (shelter.inside(bot, refuge) && shelter.sealed(bot, refuge)) refuge.verifiedAt = new Date().toISOString();
     this.state.shelters.push(refuge); save();
     return true;
-    } finally {
+    } catch (err) {
       const retreat = require('./shaft-retreat').current(bot, this.state);
-      if (retreat?.phase === 'descending') retreat.phase = 'returning';
+      if (retreat) retreat.descentFailure = { name: err.name, message: err.message, ...(err.mutationReason ? { mutationReason: err.mutationReason } : {}) };
+      if (err.name === 'StructureMutationRefused') this.state.failWhy = err.message;
+      throw err;
+    } finally {
+      require('./shaft-retreat').resume(bot, this.state);
       save();
     }
   }

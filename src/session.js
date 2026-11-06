@@ -62,7 +62,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     if(!externalPersona)throw new Error('Shared-world mutation policy requires persona mode');
     mutationPolicy=require('./mutation-authority').validateMutationAuthority(mutationPolicy,{worldId:mutationWorldId,principal:config.username});
   }
-  let persona = null, vision = null;
+  let persona = null, vision = null, visionCapturePending=false, lastVisionCapture=-Infinity;
   let ended = false, spawned = false, gameplayAuthorized=false, resolveClosed;
   const connectedAt = Date.now();
   const closed = new Promise(resolve => { resolveClosed = resolve; });
@@ -224,7 +224,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
   // Whatever is active pays for the calls made on its behalf; with nothing
   // active, an idle bot that has a dream is still that dream's cost.
   const routed = withRun(client, () => active?.goal.ledgerRun ?? dreamStore.read()?.ledgerRun);
-  const contextual = getGoal => externalPersona ? require('./persona-context').withPersonaContext(routed,getGoal,goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId),{getProfile:()=>persona?.actorProfile,getMutationAuthority:()=>mutationAuthority?.summary()}) : routed;
+  const contextual = getGoal => externalPersona ? require('./persona-context').withPersonaContext(routed,getGoal,goal=>active?.goal===goal&&!!persona?.valid(goal.personaGoalId),{getProfile:()=>persona?.actorProfile,getSharedContext:()=>persona?.sharedContext,getMutationAuthority:()=>mutationAuthority?.summary()}) : routed;
   const dreamName = (key, text) => `dream · ${key === 'custom' ? text : DREAMS[key].title}`;
   // The dream's run in the ledger. A standing from before the ledger
   // existed gets one now, dated from when the dream was given.
@@ -883,8 +883,10 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
     };
     const buildApi=require('./persona-build'), buildEnabled=process.env.JEV_PERSONA_BUILD==='1';
     const visitApi=require('./persona-visit'),visitEnabled=personaVisit===true;
+    const safeToLook=()=>ready&&!ended&&(!active||active.idle)&&bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false&&!['survival','vitals'].includes(bot._turn?.holder);
     bot._personaVisitResolve=(id,principal)=>visitApi.resolveDestination(bot,id,{known:world.known,principal});
     persona = require('./persona-admission').createPersona({
+      reaction:require('./persona-reaction').createPersonaReaction({client:contextual(()=>active?.goal),getPersona:()=>ended?null:persona,getGoal:()=>active?.goal,canObserve:()=>safeToLook()&&!visionCapturePending&&Date.now()-lastVisionCapture>=5000}),
       rendezvous, allowVisiblePlayers:personaVisiblePlayers, allowLocalMove:personaLocalMove,movementAffordances:()=>require('./persona-move').standingAffordances(bot,{enabled:personaLocalMove&&ready&&!ended}),checkMove:target=>require('./persona-move').canMove(bot,target,{enabled:personaLocalMove}), items:list('JEV_PERSONA_ITEMS'), players:list('JEV_PERSONA_PLAYERS'), worldId:process.env.MC_WORLD_ID || identity,
       read:()=>({...require('./persona-observation').nearbyWorld(bot),
         mutation_authority:require('./mutation-authority').mutationAuthoritySummary(bot),
@@ -896,6 +898,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
         dimension:bot.game?.dimension || 'unknown',version:bot.version || null,bot_uuid:bot.player?.uuid || null,
         player_identities:ready && !ended ? require('./persona-roster').playerIdentities(bot) : [],
         position:position(bot.entity?.position),
+        yaw:Number.isFinite(bot.entity?.yaw)?bot.entity.yaw:null,pitch:Number.isFinite(bot.entity?.pitch)?bot.entity.pitch:null,
         player_positions:Object.fromEntries(Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).slice(0,128).map(p=>[p.username,position(p.entity.position)])),
         items:Object.keys(bot.registry?.itemsByName || {}),
         players:Object.values(bot.players || {}).filter(p=>p.entity && p.username!==bot.username).map(p=>p.username),
@@ -932,7 +935,7 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       },
     });
     if(personaProfile!==null)persona.setProfile(personaProfile,persona.sessionId);
-    if(process.env.JEV_VISION_ENABLED==='1')vision=require('./persona-vision').installPersonaVision(bot,{sessionId:()=>persona.sessionId,worldId:pendingWorldId,ready:()=>ready&&!ended,activeGoalId:()=>active?.goal?.personaGoalId||null,safeToLook:()=>ready&&!ended&&(!active||active.idle)&&bot.health>=12&&bot.food>=10&&bot.entity?.onGround!==false&&!['survival','vitals'].includes(bot._turn?.holder)});
+    if(process.env.JEV_VISION_ENABLED==='1')vision=require('./persona-vision').installPersonaVision(bot,{sessionId:()=>persona.sessionId,worldId:pendingWorldId,ready:()=>ready&&!ended,activeGoalId:()=>active?.goal?.personaGoalId||null,safeToLook});
     require('./persona-chat').installPersonaChat(bot,{community:config.host==='mc.agicraft.ru'&&Number(config.port)===25565,ready:()=>ready&&!ended,emit:event=>persona.emit(event)});
     let lastSpeech=0;
     persona.chat = text=>{
@@ -941,7 +944,13 @@ function createSession(config, client, { stateDirectory = path.join(__dirname, '
       lastSpeech=Date.now();personaSpeech(text);
     };
   }
-  return { bot, persona, closed, captureVision:()=>vision?vision.capture():Promise.reject(Object.assign(new Error('vision_unavailable'),{code:'vision_unavailable'})),lookVision:target=>vision?vision.look(target):Promise.reject(Object.assign(new Error('vision_unavailable'),{code:'vision_unavailable'})), setVoiceState(sessionId,generation,state){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||!voice)return 'voice_unavailable';return voice.setState(generation,state);}, refreshVoice(sessionId){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||bot.game?.gameMode!=='survival'||!voice)return 'voice_unavailable';return voice.refresh();}, voiceSession(){return ready&&!ended&&persona?voice?.read(persona.sessionId)??null:null;}, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
+  async function captureVision(){
+    if(!vision)throw Object.assign(new Error('vision_unavailable'),{code:'vision_unavailable'});
+    if(visionCapturePending)throw Object.assign(new Error('vision_rate_limited'),{code:'vision_rate_limited'});
+    visionCapturePending=true;lastVisionCapture=Date.now();
+    try{return await vision.capture();}finally{visionCapturePending=false;}
+  }
+  return { bot, persona, closed, captureVision,lookVision:target=>vision?vision.look(target):Promise.reject(Object.assign(new Error('vision_unavailable'),{code:'vision_unavailable'})), setVoiceState(sessionId,generation,state){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||!voice)return 'voice_unavailable';return voice.setState(generation,state);}, refreshVoice(sessionId){if(!persona||sessionId!==persona.sessionId)return 'stale_session';if(!ready||ended||bot.game?.gameMode!=='survival'||!voice)return 'voice_unavailable';return voice.refresh();}, voiceSession(){return ready&&!ended&&persona?voice?.read(persona.sessionId)??null:null;}, shutdown() { close('shutdown'); bot.quit('Shutting down'); } };
 }
 
 module.exports = { unworkable, createSession };

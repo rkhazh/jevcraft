@@ -20,6 +20,30 @@ test('duplicate JSON keys including escaped names are rejected',()=>{
  assert.throws(()=>parseStrict('{"spec":{"kind":"follow","kind":"obtain"}}'));
  assert.deepEqual(parseStrict('{"a":[{"x":1},{"x":2}]}'),{a:[{x:1},{x:2}]});
 });
+test('chat optionally fences the current session immediately before delivery, including streamed reconnects',async()=>{
+ const http=require('node:http'),chats=[];
+ const old={sessionId:'first',chat:text=>chats.push({session:'first',text})};
+ const next={sessionId:'second',chat:text=>chats.push({session:'second',text})};
+ let current=old;const token='session-fenced-chat-token-1234567890';
+ const server=await startPersonaTransport({port:0,token,getSession:()=>({persona:current})});
+ const url=`http://127.0.0.1:${server.address().port}/chat`,headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
+ const send=extra=>fetch(url,{method:'POST',headers:{...headers,...extra},body:JSON.stringify({text:'A considered reply.'})});
+ try{
+  assert.equal((await send({'X-Persona-Session':'stale'})).status,409);assert.equal(chats.length,0);
+  assert.equal((await send({'X-Persona-Session':'first'})).status,200);
+  assert.equal((await send({})).status,200,'legacy callers may omit the optional fence');
+  assert.deepEqual(chats,[{session:'first',text:'A considered reply.'},{session:'first',text:'A considered reply.'}]);
+  const status=await new Promise((resolve,reject)=>{
+   const req=http.request(url,{method:'POST',headers:{...headers,'X-Persona-Session':'first'}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});
+   req.on('error',reject);req.flushHeaders();req.write('{"text":');
+   setTimeout(()=>{current=next;req.end('"Reply for the previous session."}');},20);
+  });
+  assert.equal(status,409);assert.equal(chats.length,2);
+  assert.equal((await send({'X-Persona-Session':'first'})).status,409);
+  assert.equal((await send({'X-Persona-Session':'second'})).status,200);
+  assert.deepEqual(chats.at(-1),{session:'second',text:'A considered reply.'});
+ }finally{await new Promise(resolve=>server.close(resolve));}
+});
 test('voice secrets require same authorization and origin protection; stale state is unavailable',async()=>{
  let voice={session_id:'session',generation:'generation',secret:'private-value'},snapshots=0;
  const server=await startPersonaTransport({port:0,token:'b'.repeat(40),getSession:()=>({persona:{snapshot(){snapshots++;return {}}},voiceSession:()=>voice})});

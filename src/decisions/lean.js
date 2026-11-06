@@ -132,7 +132,13 @@ function leanState(state) {
     try { if (LEAN[k]) x = LEAN[k](v); else if (RECORDS[k]) x = recordSays(v, RECORDS[k]); } catch (_) { x = v; }
     out[k] = x;
   }
-  return tidy(out);
+  // Shared evidence is already bounded as whole records. Rounding its
+  // coordinates/dates or rewriting arrays/nulls would change the retained
+  // provenance and make the tactical model read a different memory view.
+  const { shared_context: shared, ...ordinary } = out;
+  const compact = tidy(ordinary);
+  if (Object.hasOwn(out, 'shared_context')) compact.shared_context = structuredClone(shared);
+  return compact;
 }
 
 // Sentences, split where a sentence ends and a capital begins.

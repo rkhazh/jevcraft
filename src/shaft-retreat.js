@@ -19,7 +19,11 @@ function descentBlocked(bot,state){
 }
 function begin(bot,state,start,bottom){
  if(descentBlocked(bot,state)||!point(start)||!point(bottom)||start.x!==bottom.x||start.z!==bottom.z||start.y-bottom.y<2||start.y-bottom.y>12)return null;
- return state.shaftRetreat={dimension:bot.game.dimension,entry:{...start},bottom:{...bottom},phase:'descending',beganAt:Date.now(),excavationUsed:true,caps:[]};
+ const floor=bot.blockAt(vec(start).offset(0,-1,0));
+ // Reserve before risking a dig. A reservation is not evidence that a shaft
+ // exists; keep the original footing to reconcile a no-start interruption.
+ return state.shaftRetreat={dimension:bot.game.dimension,entry:{...start},bottom:{...bottom},phase:'descending',beganAt:Date.now(),excavationReserved:true,excavationUsed:false,
+  descentObserved:false,initialFloor:floor&&{name:floor.name,stateId:floor.stateId},caps:[]};
 }
 function noteCap(bot,state,p,goal){
  const r=current(bot,state),b=bot.blockAt(p),laid=require('./own-blocks').laidAt(bot,p,null);
@@ -88,6 +92,8 @@ function interrupted(bot,r,reason,report,save){
 }
 async function returnStep(bot,task,state,goal,save,{dig,pillar=require('./pillar-recovery').pillarUp,report=()=>{},interrupt=()=>urgentReason(bot)}={}){
  const r=current(bot,state);if(!r)return false;
+ if(resume(bot,state))save();
+ if(!['returning','sheltered'].includes(r.phase))return false;
  r.phase='returning';save();
  if(arrived(bot,r)){
   r.phase='returned';delete r.failure;delete r.retryAfter;
@@ -131,6 +137,7 @@ async function returnStep(bot,task,state,goal,save,{dig,pillar=require('./pillar
  return false;
 }
 async function waitStep(bot,task,state,goal,save,{report=()=>{},now=Date.now,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
+ if(resume(bot,state))save();
  const r=current(bot,state);if(r?.phase!=='returning'||!(r.retryAfter>now()))return false;
  const until=Math.min(r.retryAfter,now()+5000);
  bot._shaftReturnWaitingUntil=until;
@@ -140,7 +147,7 @@ async function waitStep(bot,task,state,goal,save,{report=()=>{},now=Date.now,sle
   while(now()<until){
    task.check();require('./vitals').checkAir(bot);
    const reason=urgentReason(bot);if(reason)interrupted(bot,r,reason,report,save);
-   if(resume(bot,state)){save();if(r.phase==='displaced')return false;}
+   if(resume(bot,state)){save();if(r.phase!=='returning')return false;}
    await sleep(Math.min(100,until-now()));
   }
   return true;
@@ -149,7 +156,7 @@ async function waitStep(bot,task,state,goal,save,{report=()=>{},now=Date.now,sle
 function endQuietEncounter(bot,state,now=Date.now()){
  const r=current(bot,state);
  const loaded=bot.entity?.onGround!==false&&!!bot.blockAt(bot.entity.position.floored());
- if(!r||!['returned','displaced'].includes(r.phase)||!loaded||urgent(bot)||require('./danger').threats(bot,32).length){delete bot._shaftQuiet;return false;}
+ if(!r||!['returned','displaced','not_started'].includes(r.phase)||!loaded||urgent(bot)||require('./danger').threats(bot,32).length){delete bot._shaftQuiet;return false;}
  if(bot._shaftQuiet?.record!==r){bot._shaftQuiet={record:r,since:now};return false;}
  if(now-bot._shaftQuiet.since<10000)return false;
  state.shaftRetreatHistory=[...(state.shaftRetreatHistory||[]),{...r,endedAt:now}].slice(-4);
@@ -157,10 +164,28 @@ function endQuietEncounter(bot,state,now=Date.now()){
 }
 function resume(bot,state){
  const r=current(bot,state);if(!r)return false;
- if(r.phase==='descending'){r.phase='returning';return true;}
- if(r.phase==='returning'&&(Math.floor(bot.entity.position.x)!==r.entry.x||Math.floor(bot.entity.position.z)!==r.entry.z)){
-  r.phase='displaced';r.failure='The body is outside the recorded escape column; other survival actions remain available';return true;
+ const p=bot.entity.position,c=p.floored();let changed=false;
+ const below=c.x===r.entry.x&&c.z===r.entry.z&&p.y<r.entry.y-.2;
+ if(['descending','returning','sheltered','not_started'].includes(r.phase)&&below&&!r.descentObserved){r.descentObserved=true;changed=true;}
+ if(['descending','returning'].includes(r.phase)){
+  const floor=bot.blockAt(vec(r.entry).offset(0,-1,0));
+  const unstarted=r.excavationReserved===true&&r.excavationUsed===false&&!r.descentObserved&&arrived(bot,r)&&r.initialFloor&&floor?.name===r.initialFloor.name&&floor?.stateId===r.initialFloor.stateId;
+  if(unstarted||r.phase==='descending'){r.phase=unstarted?'not_started':'returning';changed=true;}
+  if(unstarted){
+   if(state.stance?.choice==='dig_down')delete state.stance;
+   if(bot._stance?.choice==='dig_down')delete bot._stance;
+  }
  }
- return false;
+ // A cancelled dig may take effect after its call has unwound. An observed
+ // later descent restores the route, even if the first reconciliation found
+ // the original floor intact.
+ if(r.phase==='not_started'&&below){r.phase='returning';changed=true;}
+ // A jump above the entry is not an exit. Observed supported open footing
+ // above it is; preserve the encounter budget without inventing a return.
+ const above=p.y>r.entry.y+.2&&require('./persona-visit').safeFooting(bot);
+ if(['returning','sheltered'].includes(r.phase)&&(c.x!==r.entry.x||c.z!==r.entry.z||above)){
+  r.phase='displaced';r.failure='The body is outside the recorded escape column; other survival actions remain available';delete r.retryAfter;return true;
+ }
+ return changed;
 }
 module.exports={current,descentBlocked,begin,noteCap,noteReturnCover,observedCap,capMatches,arrived,preflight,urgent,urgentReason,returnStep,waitStep,endQuietEncounter,resume};

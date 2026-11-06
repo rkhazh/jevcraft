@@ -3,10 +3,10 @@ const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === [...keys].sort().join();
 const stable = v => JSON.stringify(v && typeof v === 'object' ? (Array.isArray(v) ? v.map(x=>JSON.parse(stable(x))) : Object.fromEntries(Object.keys(v).sort().map(k=>[k,JSON.parse(stable(v[k]))]))) : v);
-function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({}),visitAffordances=()=>({enabled:false,destinations:[]}),resolveVisit=()=>null,verifyVisit=()=>false,craftAffordances=()=>({enabled:false,items:[]}),checkCraft=()=>false}) {
+function createPersona({read, start, stop, reaction=null, impossible=()=>false, checkBuild=()=>false, verifyBuild=()=>false, items=[], players=[], worldId='local',rendezvous=null,allowVisiblePlayers=false,allowLocalMove=false,checkMove=()=>false,movementAffordances=()=>({}),visitAffordances=()=>({enabled:false,destinations:[]}),resolveVisit=()=>null,verifyVisit=()=>false,craftAffordances=()=>({enabled:false,items:[]}),checkCraft=()=>false}) {
  rendezvous=require('./persona-rendezvous').validateRendezvous(rendezvous);
  const sessionId=randomUUID(), observations=new Map(), seen=new Map(), log=[];
- let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve(), actorProfile=null;
+ let active=null, lastResult=null, sequence=0, closed=false, serial=Promise.resolve(), actorProfile=null, sharedMemory=null;
  function setProfile(profile,id){
   const rejected=reason=>({status:'rejected',reason,session_id:sessionId});
   if(closed||id!==sessionId)return rejected('wrong_session');
@@ -16,10 +16,25 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   actorProfile=structuredClone(profile);
   return {status:'ready',session_id:sessionId,persona_id:profile.persona_id};
  }
+ function setSharedContext(context,id){
+  const rejected=reason=>({status:'rejected',reason,session_id:sessionId});
+  if(closed||id!==sessionId)return rejected('wrong_session');
+  if(!require('./persona-context').validSharedContext(context))return rejected('invalid_shared_context');
+  if(context.session_id!==sessionId)return rejected('wrong_session');
+  if(context.world_id!==worldId)return rejected('wrong_world');
+  if(!actorProfile)return rejected('profile_required');
+  if(context.persona_id!==actorProfile.persona_id)return rejected('wrong_persona');
+  const now=Date.now()/1000;
+  if(context.observed_at>now+1||now-context.observed_at>10)return rejected('expired');
+  if(sharedMemory&&context.revision<sharedMemory.revision)return rejected('stale_revision');
+  if(sharedMemory&&context.revision===sharedMemory.revision&&stable(context)!==stable(sharedMemory))return rejected('revision_conflict');
+  sharedMemory=structuredClone(context);
+  return {status:'ready',session_id:sessionId,revision:context.revision};
+ }
  const enqueue=fn=>{const p=serial.then(fn);serial=p.catch(()=>{});return p};
  function emit(data) { const event={...data,event_id:randomUUID(),session_id:sessionId,sequence:++sequence,observed_at:Date.now()/1000}; if(data.type==='goal'&&['complete','blocked','failed','expired','cancelled'].includes(data.status))lastResult=structuredClone(event); log.push(event);if(log.length>1000)log.shift();return event; }
  function snapshot() {
-  const state={...read(),actor_profile:{supported:true,persona_id:closed?null:actorProfile?.persona_id??null}}, id=randomUUID(), now=Date.now()/1000;
+  const state={...read(),actor_profile:{supported:true,persona_id:closed?null:actorProfile?.persona_id??null},shared_context:{supported:true,revision:sharedMemory?.revision??0},...(typeof reaction==='function'?{reaction_capabilities:{enabled:!closed}}:{})}, id=randomUUID(), now=Date.now()/1000;
   const craft=craftAffordances(actorProfile?.persona_id??null);
   const visit=visitAffordances(actorProfile?`persona:${actorProfile.persona_id}`:null);
   observations.set(id,{at:now,mono:performance.now(),visit:structuredClone(visit),craft:structuredClone(craft)});for(const [key,v] of observations)if(now-v.at>5||observations.size>128)observations.delete(key);
@@ -105,7 +120,9 @@ function createPersona({read, start, stop, impossible=()=>false, checkBuild=()=>
   const result={status:'accepted',goal_id:p.goal_id,session_id:sessionId,expires_at:expiresAt};seen.set(p.goal_id,{fingerprint,result});emit({type:'goal',goal_id:p.goal_id,status:'accepted',summary:'Goal admitted',verified:false});return result;
  }
  return {get sessionId(){return sessionId;},snapshot,valid,emit,submit:p=>enqueue(()=>submitNow(p)),cancel:id=>enqueue(()=>cancelNow(id)),
+  ...(typeof reaction==='function'?{react:reaction}:{}),
   get actorProfile(){return !closed&&actorProfile?structuredClone(actorProfile):null;},setProfile,
+  get sharedContext(){const now=Date.now()/1000;return !closed&&sharedMemory&&sharedMemory.observed_at<=now+1&&now-sharedMemory.observed_at<=30?structuredClone(sharedMemory):null;},setSharedContext,
   events(after) {
    const pending=log.filter(e=>e.sequence>after);
    const packet={events:[],cursor:after,oldest_sequence:log[0]?.sequence??sequence,has_more:false};

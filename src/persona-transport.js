@@ -43,13 +43,21 @@ async function startPersonaTransport({getSession,token,port=8766}){
    if(req.method==='GET'&&url.pathname==='/events'){
     const after=Number(url.searchParams.get('after')||0);if(!Number.isSafeInteger(after)||after<0)return reply(400,{error:'invalid_cursor'});return reply(200,api.events(after));
    }
-   if(req.method!=='POST'||!['/goal','/cancel','/chat','/voice/state','/look','/persona-profile'].includes(url.pathname))return reply(404,{error:'not_found'});
+   if(req.method!=='POST'||!['/goal','/cancel','/chat','/voice/state','/look','/persona-profile','/persona-context','/reaction'].includes(url.pathname))return reply(404,{error:'not_found'});
    let size=0, chunks=[];for await(const chunk of req){size+=chunk.length;if(size>32768){reply(413,{error:'payload_too_large'});req.resume();return;}chunks.push(chunk);}
    const data=parseStrict(Buffer.concat(chunks).toString('utf8'));
-   if(url.pathname==='/persona-profile'){
+   if(url.pathname==='/reaction'){
     const id=req.headers['x-persona-session'];
     if(id!==api.sessionId||getSession()?.persona!==api)return reply(409,{error:'stale_session'});
-    return reply(200,api.setProfile(data,id));
+    if(typeof api.react!=='function')return reply(200,{status:'rejected',reason:'reaction_unavailable',session_id:id});
+    const selected=await api.react(data,id);
+    if(getSession()?.persona!==api)return reply(409,{error:'stale_session'});
+    return reply(200,selected);
+   }
+   if(url.pathname==='/persona-profile'||url.pathname==='/persona-context'){
+    const id=req.headers['x-persona-session'];
+    if(id!==api.sessionId||getSession()?.persona!==api)return reply(409,{error:'stale_session'});
+    return reply(200,url.pathname==='/persona-context'?api.setSharedContext(data,id):api.setProfile(data,id));
    }
    if(url.pathname==='/look'){
     if(req.headers['x-persona-session']!==api.sessionId)return reply(409,{error:'stale_session'});
@@ -67,6 +75,10 @@ async function startPersonaTransport({getSession,token,port=8766}){
    if(url.pathname==='/goal')return reply(200,await api.submit(data));
    if(url.pathname==='/cancel'){if(!exact(data,['goal_id'])||typeof data.goal_id!=='string')return reply(400,{error:'invalid_cancel'});return reply(200,await api.cancel(data.goal_id));}
    if(!exact(data,['text'])||!plainSpeech(data.text))return reply(400,{error:'plain_speech_required'});
+   const speechSession=req.headers['x-persona-session'];
+   // Older clients may omit this fence. A scoped reply must still belong to
+   // this exact session after body parsing; real persona.chat sends synchronously.
+   if(speechSession!==undefined&&(speechSession!==api.sessionId||getSession()?.persona!==api))return reply(409,{error:'stale_session'});
    await api.chat(data.text);return reply(200,{status:'sent'});
   }catch(err){reply(400,{error:'invalid_request'});}
  });
