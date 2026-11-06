@@ -5223,9 +5223,9 @@ async function executeDesignedBuildStep(bot, task, goal, save, client, onStep = 
     // together, so its choice of spot is tried first. It is a suggestion, not
     // an instruction: a player's "here" still wins, and code searches on its
     // own if the ground does not turn out to hold the building.
-    const owned = goal.personaBuildPolicy && edited ? require('./persona-build').verifiedEditOwnership(bot,edited) : registry?.claimed(dimensionName(bot), edited ? undefined : goal.buildId);
+    const owned = goal.personaBuildPolicy && !goal.nativeCapabilities && edited ? require('./persona-build').verifiedEditOwnership(bot,edited) : registry?.claimed(dimensionName(bot), edited ? undefined : goal.buildId);
     // Everything Jev built except the building being changed stays standing.
-    const protect = goal.personaBuildPolicy && edited ? registry.editProtection(bot, edited) :
+    const protect = goal.personaBuildPolicy && !goal.nativeCapabilities && edited ? registry.editProtection(bot, edited) :
       registry?.claimed(dimensionName(bot), edited ? edited.id : goal.buildId);
     const here = bot.entity.position.floored();
     const proposed = !goal.buildAnchor && !at && schematic.site
@@ -10824,7 +10824,7 @@ async function runGoal(bot, task, goal, store, { maxSteps = Infinity, onStep = (
         goal.status='complete';goal.completedAt=new Date().toISOString();save();onStep(goal);return {ok:true,goal};
       }
       if (goal.kind==='visit'&&goal.personaVisitPolicy) {
-        await require('./persona-visit').visitStep(bot,task,goal,save);
+        if(!await require('./persona-visit').visitStep(bot,task,goal,save)){onStep(goal);continue;}
         goal.status='complete';goal.completedAt=new Date().toISOString();save();onStep(goal);return {ok:true,goal};
       }
       if(require('./persona-craft').restricted(goal))complete=await craftFromInventoryStep(bot,task,goal,save);

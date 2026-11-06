@@ -1,7 +1,7 @@
 {
   "hermes_python": "/absolute/path/jevcraft/.tolik/hermes-source/.venv/bin/python",
   "hermes_home": "/absolute/path/jevcraft/.tolik/hermes",
-  "model": "gpt-6.1-terra",
+  "model": "gpt-6-luna",
   "state_dir": "/absolute/path/jevcraft/.tolik/body-state",
   "authority": "/absolute/path/jevcraft/.tolik/mutation-authority.json",
   "memory": "/absolute/path/jevcraft/.tolik/memory.sqlite",
@@ -10,5 +10,8 @@
   "voice": false,
   "voice_send": false,
   "operators": {},
-  "voice_players": ["SkipperBot"]
+  "voice_players": [
+    "SkipperBot"
+  ],
+  "native_capabilities": true
 }

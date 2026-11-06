@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 class Planner:
-    def __init__(self,python,home,runs,model='gpt-6.1-terra',timeout=60):
+    def __init__(self,python,home,runs,model='gpt-6-luna',timeout=60):
         # Resolving a venv interpreter symlink bypasses its pyvenv.cfg/packages.
         self.python=os.path.abspath(os.path.expanduser(str(python)));self.home=str(Path(home).resolve())
         self.runs=Path(runs);self.runs.mkdir(parents=True,exist_ok=True)

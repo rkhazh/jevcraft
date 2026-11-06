@@ -29,7 +29,9 @@ def write_json(path,value):
 
 
 def body_environment(config,secrets,run,profile,seconds,attempts):
-    if type(seconds) is not int or not 1<=seconds<=600 or type(attempts) is not int or not 1<=attempts<=60:
+    native=config.get('native_capabilities') is True
+    if (type(seconds) is not int or type(attempts) is not int or seconds<0 or attempts<0 or
+        (not native and (not 1<=seconds<=600 or not 1<=attempts<=60))):
         raise ValueError('Launch bounds are 1..600 seconds and 1..60 Jev attempts')
     env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','TMPDIR','LANG','LC_ALL'}}
     for key in ('MC_LOGIN_PASSWORD','JEV_PERSONA_TOKEN','OPENROUTER_API_KEY'):
@@ -37,7 +39,8 @@ def body_environment(config,secrets,run,profile,seconds,attempts):
         env[key]=secrets[key]
     if secrets.get('MC_LOGIN_SUCCESS_TEXT'):env['MC_LOGIN_SUCCESS_TEXT']=secrets['MC_LOGIN_SUCCESS_TEXT']
     env.update(JEV_PERSONA_PROFILE=json.dumps(profile,ensure_ascii=False),
-        JEV_PERSONA_VISIT='1',JEV_PERSONA_CRAFT_FROM_INVENTORY='1',
+        JEV_PERSONA_VISIT='1',JEV_PERSONA_CRAFT_FROM_INVENTORY='0' if native else '1',JEV_PERSONA_NATIVE='1' if native else '0',
+        MC_COMMAND_USERS=','.join(config.get('operators',{})) if native else '',
         JEV_PERSONA_ITEMS=ITEMS,JEV_PERSONA_DECISION_MODE='continuing',
         JEV_COMMUNITY_CHARACTER='TolikScheben',JEV_COMMUNITY_SECONDS=str(seconds),
         JEV_COMMUNITY_HTTP_LIMIT=str(attempts),JEV_COMMUNITY_RUN_DIRECTORY=str(run),
@@ -69,7 +72,7 @@ def migrate(args):
     memory=Memory(HOME/'memory.sqlite')
     imported=memory.import_lab(character/'episodes.sqlite');memory.close()
     config=dict(hermes_python=os.path.abspath(os.path.expanduser(args.hermes_python)),hermes_home=str(HOME/'hermes'),
-        model='gpt-6.1-terra',state_dir=str(HOME/'body-state'),authority=str(HOME/'mutation-authority.json'),
+        model='gpt-6-luna',native_capabilities=True,state_dir=str(HOME/'body-state'),authority=str(HOME/'mutation-authority.json'),
         vision=assets.exists(),asset_root=str(HOME/'vision-assets'),voice=False,voice_send=False,voice_players=[],memory=str(HOME/'memory.sqlite'))
     write_json(HOME/'config.json',config)
     print(json.dumps({'configured':True,'historical_records_imported':imported,'config':str(HOME/'config.json')}))
@@ -108,7 +111,7 @@ def status(stop=False):
 
 
 def run(args):
-    if not 1<=args.seconds<=600 or not 1<=args.max_calls<=60:raise ValueError('Invalid session bounds')
+    if any(type(v) is not int or v<0 for v in (args.seconds,args.max_calls,args.max_jev)):raise ValueError('Budgets must be nonnegative integers; zero is unlimited')
     began=time.time()
     lock=lock_running()
     if lock is None:raise RuntimeError('Tolik is already running')
@@ -127,13 +130,13 @@ def run(args):
         nonlocal stopping,reason
         stopping=True;reason='operator_stop'
     signal.signal(signal.SIGTERM,shutdown);signal.signal(signal.SIGINT,shutdown)
-    deadline=time.monotonic()+args.seconds
+    deadline=time.monotonic()+args.seconds if args.seconds else float('inf')
     def requested():
         if stopping:return True
         try:return json.loads((HOME/'stop.request').read_text()).get('requested_at',0)>=began
         except (OSError,ValueError):return False
     status_data=dict(status='starting',pid=os.getpid(),run_dir=str(run_dir),started_at=began,
-        deadline=began+args.seconds,model=config['model'],max_calls=args.max_calls,max_jev=args.max_jev)
+        deadline=began+args.seconds if args.seconds else None,model=config['model'],max_calls=args.max_calls,max_jev=args.max_jev)
     write_json(HOME/'status.json',status_data)
     print('Tolik run: '+str(run_dir),flush=True)
     try:
@@ -166,11 +169,11 @@ def run(args):
         while time.monotonic()<deadline and not requested() and body_process.poll() is None:
             runtime.tick()
             if runtime.last_snapshot.get('connected') is not True:reason='disconnected';break
-            if runtime.last_snapshot.get('health',20)<10:reason='low_health';break
+            if not config.get('native_capabilities') and runtime.last_snapshot.get('health',20)<10:reason='low_health';break
             if time.monotonic()-last_sample>=2:
                 with open(run_dir/'observations.jsonl','a') as stream:stream.write(json.dumps(runtime.last_snapshot,ensure_ascii=False)+'\n')
                 last_sample=time.monotonic()
-            if runtime.calls>=args.max_calls and not runtime.inflight:reason='planner_budget';break
+            if args.max_calls and runtime.calls>=args.max_calls and not runtime.inflight:reason='planner_budget';break
             time.sleep(.25)
         if body_process.poll() is not None:reason='body_stopped'
         elif requested():reason='operator_stop'
@@ -197,8 +200,8 @@ def main():
     migrate_parser=sub.add_parser('migrate',help='Copy existing community configuration and memory once')
     migrate_parser.add_argument('--community',required=True);migrate_parser.add_argument('--key-env')
     migrate_parser.add_argument('--hermes-python',required=True)
-    run_parser=sub.add_parser('run');run_parser.add_argument('--seconds',type=int,default=300)
-    run_parser.add_argument('--max-calls',type=int,default=24);run_parser.add_argument('--max-jev',type=int,default=40)
+    run_parser=sub.add_parser('run');run_parser.add_argument('--seconds',type=int,default=0,help='Operator duration cap; 0 runs until stopped')
+    run_parser.add_argument('--max-calls',type=int,default=0);run_parser.add_argument('--max-jev',type=int,default=0)
     sub.add_parser('status');sub.add_parser('stop')
     args=parser.parse_args()
     if args.command=='migrate':migrate(args)

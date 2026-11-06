@@ -22,7 +22,7 @@ class Body:
         headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'}
         if session_id:headers['X-Persona-Session']=session_id
         raw=None if payload is None else json.dumps(payload,ensure_ascii=False,allow_nan=False).encode()
-        if raw and len(raw)>32768:raise ValueError('Body request exceeds 32 KiB')
+        if raw and len(raw)>262144:raise ValueError('Body request exceeds 256 KiB')
         try:
             with self.opener.open(Request(self.url+path,data=raw,headers=headers),timeout=10) as response:
                 data=response.read(limit+1)

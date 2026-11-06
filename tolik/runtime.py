@@ -19,6 +19,7 @@ class Runtime:
         self.last_snapshot=None;self.inspection=None
         self.vision_directory=vision_directory
         self.pending_capture=None
+        self.reconcile_at=0
         self.operators=dict(operators or {})
 
     def operator_instruction(self,event):
@@ -62,14 +63,29 @@ class Runtime:
                 if event.get('type') in {'chat','voice'} and event.get('user')!=self.profile['persona_id']:
                     self.messages.append(event);self.messages=self.messages[-64:]
                     self.revision+=1;self.dirty=True
+                if event.get('type')=='native_feedback':
+                    self.feedback.append({'native':event.get('message')});self.dirty=True
                 if event.get('status') in TERMINAL:
                     self.dirty=True
                     if self.uncertain and event.get('goal_id')==self.uncertain['goal_id']:self.uncertain=None
                     if event.get('goal_id')==self.owned_goal:self.owned_goal=None
             self.cursor=packet.get('cursor',self.cursor)
             if not packet.get('has_more'):break
-        if self.uncertain and (state.get('active_goal_id')==self.uncertain['goal_id'] or self.clock()>=self.uncertain['expires_at']):
+        if self.uncertain and (state.get('active_goal_id')==self.uncertain['goal_id'] or (self.uncertain['expires_at'] is not None and self.clock()>=self.uncertain['expires_at'])):
             self.uncertain=None;self.dirty=True
+        if self.uncertain and self.uncertain['expires_at'] is None and self.clock()>=self.reconcile_at:
+            # Reconcile an ambiguous send using the exact same idempotency key.
+            # An unreceived proposal eventually fails freshness; an accepted one
+            # returns its stored receipt without starting a second task.
+            self.reconcile_at=self.clock()+5
+            try:
+                receipt=self.body.submit(self.uncertain)
+                self.record('goal_reconciled',goal_id=self.uncertain['goal_id'],receipt=receipt)
+                self.uncertain=None;self.dirty=True
+                if receipt.get('status')!='accepted':
+                    self.owned_goal=None;self.feedback.append({'admission':receipt})
+            except Exception as error:
+                self.record('goal_reconcile_pending',error=type(error).__name__)
         if self.inflight:
             try:result=self.planner.poll()
             except Exception as error:
@@ -85,7 +101,7 @@ class Runtime:
                 else:
                     self.apply(result,original['state'],state)
                     self.messages=[]
-        if not self.inflight and not self.uncertain and self.calls<self.max_calls and (self.dirty or self.clock()>=self.next_plan):
+        if not self.inflight and not self.uncertain and (self.max_calls==0 or self.calls<self.max_calls) and (self.dirty or self.clock()>=self.next_plan):
             context=dict(profile=self.profile,observation=state,messages=copy.deepcopy(self.messages),
                 memory=self.memory.context(state['world_id'],18),feedback=self.feedback,
                 inspection=self.inspection,verified_results_only=True,operator_players=list(self.operators))
@@ -120,11 +136,12 @@ class Runtime:
                     try:self.voice.speak(speech)
                     except Exception as error:self.record('voice_error',error=type(error).__name__)
             else:self.feedback.append({'error':'invalid_speech'})
+        native=current.get('native_capabilities',{}).get('enabled') is True
         if plan.get('cancel') is True:
             if self.owned_goal and current.get('active_goal_id')==self.owned_goal:
                 self.record('cancel',receipt=self.body.cancel(self.owned_goal))
                 self.owned_goal=None;self.dirty=True
-            return
+                if native:current=self.body.snapshot();original=current
         query=plan.get('inspect')
         if query is not None:
             if isinstance(query,dict) and query.get('kind') in {'cells','view'}:
@@ -135,13 +152,19 @@ class Runtime:
                     self.inspection['frame_metadata']={k:v for k,v in packet.items() if k!='image_base64'}
                 self.record('inspection',result=self.inspection);self.dirty=True
             else:self.feedback.append({'error':'invalid_inspection'})
+        if plan.get('cancel') is True and not native:return
         spec=plan.get('goal')
+        if native and plan.get('cancel') is True and spec is None:
+            spec={'kind':'native','request':'stop','requester':None}
         if spec is None:return
-        if not isinstance(spec,dict) or spec.get('kind') not in {'obtain','craft','move','visit','come','follow','build','edit'}:
+        if not isinstance(spec,dict) or spec.get('kind') not in {'obtain','craft','move','visit','come','follow','build','edit','native'}:
             self.feedback.append({'error':'invalid_goal'});return
         if original.get('active_goal_id') or current.get('active_goal_id'):
             self.feedback.append({'error':'active_work_preserved'});return
-        if original.get('inventory')!=current.get('inventory') or original.get('dimension')!=current.get('dimension'):
+        native=current.get('native_capabilities',{}).get('enabled') is True
+        dimension_changed=original.get('dimension')!=current.get('dimension')
+        if ((not native and original.get('inventory')!=current.get('inventory')) or
+            (dimension_changed and (not native or spec.get('kind') in {'move','edit','build'}))):
             self.feedback.append({'error':'physical_context_changed'});self.dirty=True;return
         fresh=self.body.snapshot()
         if fresh.get('session_id')!=self.session or not fresh.get('connected') or fresh.get('active_goal_id'):
@@ -150,9 +173,10 @@ class Runtime:
         if abs(now-fresh.get('observed_at',0))>5:return
         proposal=dict(schema_version=1,goal_id=str(uuid4()),persona_id=self.profile['persona_id'],
             session_id=self.session,observation_id=fresh['observation_id'],issued_at=now,
-            expires_at=now+120,state='proposed',spec=spec)
+            expires_at=None if native else now+120,state='proposed',spec=spec)
         # Save before the network boundary; never assign a new ID after an ambiguous send.
         self.uncertain=proposal;self.owned_goal=proposal['goal_id']
+        self.reconcile_at=self.clock()+5
         self.record('goal_proposed',proposal=proposal,intent=plan.get('intent'))
         try:receipt=self.body.submit(proposal)
         except Exception as error:
