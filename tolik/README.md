@@ -98,6 +98,7 @@ enabled. Rejected actions are feedback, not proof of successful world changes.
 .tolik/venv/bin/python -m tolik run --seconds 300 --max-calls 24 --max-jev 40
 .tolik/venv/bin/python -m tolik status
 .tolik/venv/bin/python -m tolik stop
+node tolik/dashboard.js
 ```
 
 Runs are bounded to 600 seconds and 60 Jev attempts at most. A bridge/lock check
@@ -106,6 +107,11 @@ it leaves the human Minecraft client running. The CLI prints the private run
 directory containing observations, exact planner inputs/results, body logs and
 summary. Memory persists across sessions. Incomplete or rejected work is never
 reported as a verified physical success.
+
+The dashboard at <http://localhost:3051> refreshes the latest session's state,
+Hermes plans, JevCraft execution, chat and goal results. It also shows inventory,
+nearby entities, saved builds, model usage and captured frames. Use the session
+selector to review earlier runs. The dashboard runs independently of Tolik.
 
 ## Persona Lab features
 

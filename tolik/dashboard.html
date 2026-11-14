@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TolikScheben · Session dashboard</title>
+<style>
+:root{color-scheme:dark;--bg:#101713;--panel:#18221c;--line:#36463d;--text:#ecf2e9;--dim:#a2b6a7;--green:#a9dd83;--amber:#f5ca89;font:14px/1.5 "Inter",system-ui,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text)}
+main{max-width:1440px;margin:auto;padding:clamp(16px,4vw,48px)}
+header{display:flex;justify-content:space-between;align-items:center;gap:20px;border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:20px}
+h1{margin:0;font-size:clamp(24px,4vw,36px);letter-spacing:-.045em}
+h2{margin:0;font-size:15px}
+p{margin:0}
+.dim,dt,time{color:var(--dim)}
+#connection{color:var(--amber);text-align:right}
+#connection.online{color:var(--green)}
+.overview{border:1px solid var(--line);background:var(--panel);padding:18px;display:grid;grid-template-columns:minmax(0,2fr) minmax(220px,1fr);gap:16px}
+#task{font-size:18px;font-weight:650;overflow-wrap:anywhere}
+#detail{color:var(--amber);margin-top:5px;overflow-wrap:anywhere}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px}
+dd{margin:0;font-variant-numeric:tabular-nums}
+progress{width:100%;height:9px;accent-color:var(--green)}
+section.logs{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+article{min-width:0;border:1px solid var(--line);background:var(--panel)}
+.heading{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+button{font:inherit;color:var(--text);background:transparent;border:1px solid var(--line);padding:4px 10px;cursor:pointer}
+button:focus-visible,.stream:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.stream{height:clamp(220px,53vh,620px);overflow:auto;padding:0 16px;overflow-wrap:anywhere}
+ol{list-style:none;padding:0;margin:0}
+li{padding:8px 0;border-bottom:1px solid var(--line)}
+.execution{font:12px/1.5 "IBM Plex Mono",ui-monospace,monospace}
+time{display:block;font-size:11px}
+.reply{color:var(--green);margin-top:4px}
+select{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);padding:6px;max-width:100%}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:12px}
+.controls label{color:var(--dim)}
+.details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px;align-items:start}
+.card{padding:14px 16px}
+.card h2{margin-bottom:8px}
+.card li:last-child{border:0}
+.scroll{max-height:340px;overflow:auto}
+details summary{cursor:pointer;color:var(--green);padding:5px 0}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:5px 0 10px;font:12px/1.5 "IBM Plex Mono",ui-monospace,monospace;color:var(--dim);max-height:300px;overflow:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{text-align:left;border-bottom:1px solid var(--line);padding:5px 3px}
+th:last-child,td:last-child{text-align:right}
+figure{margin:0}
+.frame{display:block;max-width:100%;width:100%;height:auto;object-fit:contain;background:#0e1410}
+.frame-controls{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+a{color:var(--green)}
+@media(max-width:700px){.details{grid-template-columns:1fr}}
+@media(max-width:700px){.overview,section.logs{grid-template-columns:1fr}.stream{height:320px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div><h1>TolikScheben</h1><p id="session" class="dim">Session dashboard</p></div>
+  <div><p id="connection" role="status">Connecting…</p><p id="updated" class="dim"></p></div>
+</header>
+<div class="controls"><label for="runs">Session</label><select id="runs"><option value="">Latest run</option></select><button id="pause" aria-pressed="false">Pause updates</button></div>
+<section class="overview" aria-label="Session status">
+  <div>
+    <p id="task">Waiting for the first observation</p>
+    <p id="action" class="dim"></p>
+    <p id="detail"></p>
+    <div id="build" hidden><progress id="progress" aria-label="Blocks matched to the blueprint"></progress><p id="blocks" class="dim"></p></div>
+  </div>
+  <dl><dt>Model</dt><dd id="model">—</dd><dt>Health · Food</dt><dd id="vitals">—</dd><dt>Position</dt><dd id="position">—</dd><dt>Dimension</dt><dd id="dimension">—</dd><dt>Session timer</dt><dd id="deadline">—</dd><dt>Session time</dt><dd id="session-time">—</dd><dt>End reason</dt><dd id="end-reason">—</dd></dl>
+</section>
+<section class="logs" aria-label="Session logs">
+  <article>
+    <div class="heading"><h2 id="planner-title">Hermes · Planning</h2></div>
+    <div class="stream" id="planner-stream" tabindex="0" role="region" aria-labelledby="planner-title"><ol id="planner"></ol></div>
+  </article>
+  <article>
+    <div class="heading"><h2 id="body-title">JevCraft · Execution</h2></div>
+    <div class="stream execution" id="body-stream" tabindex="0" role="region" aria-labelledby="body-title"><ol id="body"></ol></div>
+  </article>
+</section>
+<section class="details" aria-label="Run details">
+  <article class="card"><h2>In-game chat</h2><div class="scroll" tabindex="0"><ol id="chat"></ol></div></article>
+  <article class="card"><h2>Goal results</h2><div class="scroll" tabindex="0"><ol id="results"></ol></div></article>
+  <article class="card"><h2>Inventory</h2><div class="scroll" tabindex="0"><table><thead><tr><th scope="col">Item</th><th scope="col">Count</th></tr></thead><tbody id="inventory"></tbody></table></div></article>
+  <article class="card"><h2>World and nearby entities</h2><p class="dim" id="terrain"></p><div class="scroll" tabindex="0"><ol id="entities"></ol></div><details><summary>Players on server</summary><ol id="players"></ol></details></article>
+  <article class="card"><h2>Builds and pending edits</h2><ol id="projects"></ol><details><summary>Pending edits</summary><pre id="edits"></pre></details></article>
+  <article class="card"><h2>Tolik’s view</h2><figure id="view" hidden><img class="frame" id="frame" alt="Latest scene rendered from Tolik’s Minecraft viewpoint"><figcaption class="dim" id="frame-caption"></figcaption></figure><p id="no-frame" class="dim">No saved frame for this run.</p><div id="frames" class="frame-controls"></div><details><summary>Renderer details</summary><pre id="frame-details"></pre></details></article>
+  <article class="card"><h2>Model usage</h2><dl><dt>Hermes turns</dt><dd id="planner-count">—</dd><dt>Jev requests</dt><dd id="jev-count">—</dd><dt>Hermes tokens</dt><dd id="tokens">—</dd><dt>Reported Jev cost</dt><dd id="cost">—</dd></dl><details><summary>Jev request breakdown</summary><pre id="ledger"></pre></details></article>
+  <article class="card"><h2>Execution diagnostics</h2><details><summary>Current action and blockers</summary><pre id="execution-details"></pre></details><details><summary>Latest result</summary><pre id="last-result"></pre></details><details><summary>Recent execution reports</summary><pre id="reports"></pre></details><details><summary>Capabilities and edit permissions</summary><pre id="capabilities"></pre></details></article>
+</section>
+</main>
+<script>
+const el = id => document.getElementById(id);
+const put = (id, value) => { el(id).textContent = value ?? '—'; };
+const time = new Intl.DateTimeFormat('en-GB', {timeZone:'Europe/Moscow',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+const date = new Intl.DateTimeFormat('en-GB', {timeZone:'Europe/Moscow',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+const labels = {running:'Online',starting:'Connecting…',stopped:'Stopped',stale:'No recent observation',idle:'No session yet'};
+const actions = {persona_hold:'Waiting in game',mine:'Mining',tunnel:'Digging a route',follow:'Following a player',return_to_build:'Returning to the build',place:'Placing blocks'};
+let paused = false;
+let pending = false;
+let previous = {};
+let latestRun;
+let visibleFrame;
+
+function renderLog(id, rows, makeRow) {
+  const key = JSON.stringify(rows);
+  if (previous[id] === key) return;
+  previous[id] = key;
+  const stream = el(id + '-stream');
+  const top = stream.scrollTop;
+  const atEnd = stream.scrollHeight - top - stream.clientHeight < 45;
+  el(id).replaceChildren(...rows.map(makeRow));
+  stream.scrollTop = atEnd ? stream.scrollHeight : top;
+}
+
+function newText(tag, value, className) {
+  const element = document.createElement(tag);
+  element.textContent = value ?? '';
+  if (className) element.className = className;
+  return element;
+}
+
+function updateList(id, rows, render) {
+  const key = JSON.stringify(rows);
+  if (previous[id] === key) return;
+  previous[id] = key;
+  el(id).replaceChildren(...rows.map(render));
+}
+
+const coordinates = p => p ? ['x','y','z'].map(k => Math.floor(p[k])).join(', ') : '—';
+const readable = value => String(value ?? 'unknown').replaceAll('_', ' ');
+const pretty = value => JSON.stringify(value ?? null, null, 2);
+
+function detailSummary(label, contents) {
+  const detail = document.createElement('details');
+  detail.append(newText('summary', label), newText('pre', pretty(contents)));
+  return detail;
+}
+
+function showFrame(s, frame) {
+  const src = '/vision/' + s.run + '/' + frame.file;
+  if (el('frame').getAttribute('src') !== src) el('frame').src = src;
+  put('frame-caption', date.format(frame.captured_at * 1000) + ' MSK · ' + coordinates(frame.position));
+  put('frame-details', pretty(frame));
+}
+
+function renderDetails(s) {
+  updateList('chat', s.chat.length ? s.chat : [{text:s.memoryAvailable ? 'No chat recorded in this run.' : 'Chat history unavailable.'}], entry => {
+    const row = newText('li', '');
+    if (entry.at) row.append(newText('time', time.format(entry.at * 1000) + ' · ' + entry.user + (entry.status ? ' · ' + entry.status : '')));
+    row.append(newText('p', entry.text));
+    return row;
+  });
+  updateList('results', s.results.length ? s.results : [{detail:'No goal results recorded.'}], entry => {
+    const row = newText('li', '');
+    if (entry.at) row.append(newText('time', time.format(entry.at * 1000) + ' · ' + readable(entry.status ?? entry.type) + (entry.verified ? ' · Verified' : '')));
+    row.append(newText('p', entry.detail || (entry.goal ? 'Goal ' + entry.goal.slice(0,8) : '')));
+    return row;
+  });
+  updateList('inventory', Object.entries(s.inventory).sort(([a],[b]) => a.localeCompare(b)), ([item,count]) => {
+    const row = document.createElement('tr');
+    row.append(newText('td', readable(item)), newText('td', count));
+    return row;
+  });
+  put('terrain', [s.world, s.biome, s.terrain.ground && 'Ground ' + readable(s.terrain.ground), s.terrain.feet && 'Feet ' + readable(s.terrain.feet), s.terrain.head && 'Head ' + readable(s.terrain.head)].filter(Boolean).join(' · ') || 'No terrain recorded.');
+  updateList('entities', s.entities.length ? s.entities : [{name:'No nearby entities observed.'}], item =>
+    newText('li', readable(item.name) + (item.type ? ' · ' + item.type + ' · ' + item.distance + ' blocks' : '')));
+  updateList('players', s.players, item => newText('li', item.name + (item.position ? ' · ' + coordinates(item.position) : '')));
+  updateList('projects', s.builds.length ? s.builds : [{name:'No saved builds in this observation.'}], project => {
+    const row = newText('li', '');
+    if (!project.id) { row.textContent = project.name; return row; }
+    const verification = project.verification ?? project.last_verification;
+    row.append(detailSummary(project.name + ' · ' + readable(project.status), project));
+    row.append(newText('p', [coordinates(project.origin), project.block_count == null ? null : project.block_count + ' blocks planned', verification?.matched_blocks == null ? null : verification.matched_blocks + ' matched', project.verification_scope ?? project.status_scope].filter(Boolean).join(' · '), 'dim'));
+    return row;
+  });
+  put('edits', pretty(s.edits));
+  el('view').hidden = !s.frames.length;
+  el('no-frame').hidden = Boolean(s.frames.length);
+  const frame = s.frames.find(f => f.file === visibleFrame) ?? s.frames[0];
+  if (frame) showFrame(s, frame);
+  else put('frame-details', '');
+  updateList('frames', s.frames, (item, index) => {
+    const button = newText('button', index === 0 ? 'Latest frame' : time.format(item.captured_at * 1000));
+    button.addEventListener('click', () => {
+      visibleFrame = index === 0 ? undefined : item.file;
+      showFrame(s, item);
+    });
+    return button;
+  });
+  const usage = s.usage;
+  put('planner-count', usage.plannerCalls + (usage.plannerLimit ? ' / ' + usage.plannerLimit : ''));
+  put('jev-count', usage.jevAttempts + (usage.jevLimit ? ' / ' + usage.jevLimit : ''));
+  const totals = s.planner.map(entry => entry.usage?.total_tokens).filter(Number.isFinite);
+  put('tokens', totals.length ? totals.reduce((sum,n) => sum+n, 0).toLocaleString() : '—');
+  const known = usage.ledger.filter(entry => entry.charge_known && Number.isFinite(entry.cost_usd));
+  const unknown = Math.max(usage.ledger.length, usage.jevAttempts) - known.length;
+  put('cost', (known.length ? '$' + known.reduce((sum,e) => sum+e.cost_usd, 0).toFixed(4) : '—') + (unknown ? ' · ' + unknown + ' unknown' : ''));
+  put('ledger', pretty(usage.ledger));
+  put('execution-details', pretty(s.execution));
+  put('last-result', pretty(s.lastResult));
+  put('reports', pretty(s.reports));
+  put('capabilities', pretty({ ...s.capabilities, edit_permissions: s.authority }));
+}
+
+async function refresh() {
+  if (paused || pending) return;
+  pending = true;
+  try {
+    const selection = el('runs').value;
+    const response = await fetch('/state' + (selection ? '?run=' + encodeURIComponent(selection) : ''), {signal: AbortSignal.timeout(3500)});
+    if (!response.ok) throw new Error('Status unavailable');
+    const s = await response.json();
+    if (paused || selection !== el('runs').value) return;
+    if (latestRun !== s.run) {
+      previous = {};
+      latestRun = s.run;
+      visibleFrame = undefined;
+    }
+    put('connection', labels[s.status] ?? s.status);
+    el('connection').classList.toggle('online', s.connected);
+    put('session', s.run ? (s.run !== s.activeRun ? 'Archived session' : s.status === 'stopped' ? 'Last session' : 'Current session') : 'Session dashboard');
+    updateList('runs', ['', ...s.runs], value => {
+      const parts = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})\./);
+      const label = parts ? date.format(new Date(parts[1] + '-' + parts[2] + '-' + parts[3] + 'T' + parts[4] + ':' + parts[5] + ':' + parts[6] + 'Z')) + ' MSK' : 'Latest run';
+      return new Option(label, value, false, value === selection);
+    });
+    put('updated', s.observedAt ? 'Observed ' + time.format(s.observedAt * 1000) + ' MSK' : '');
+    put('model', s.model);
+    put('vitals', s.health == null ? '—' : s.health + ' / 20 · ' + s.food + ' / 20');
+    put('position', coordinates(s.position));
+    put('dimension', s.dimension);
+    put('deadline', s.deadline ? time.format(s.deadline * 1000) + ' MSK' : s.status === 'running' ? 'None' : '—');
+    put('session-time', [s.startedAt, s.stoppedAt].filter(Boolean).map(value => time.format(value * 1000)).join(' – ') || '—');
+    put('end-reason', s.reason ? readable(s.reason) : '—');
+    put('task', s.request || (s.connected ? 'Waiting for a task' : 'No active task'));
+    put('action', actions[s.action] ?? s.action ?? '');
+    put('detail', s.status === 'running' ? s.detail ?? '' : '');
+    el('build').hidden = !s.progress;
+    if (s.progress) {
+      el('progress').max = s.progress.total;
+      el('progress').value = s.progress.matched;
+      put('blocks', s.progress.matched + ' / ' + s.progress.total + ' blocks matched · ' + s.progress.placed + ' placements recorded');
+    }
+    renderLog('body', s.body.length ? s.body : ['Waiting for execution events'], line => newText('li', line));
+    renderLog('planner', s.planner.length ? s.planner : [{intent:'Waiting for the first plan'}], entry => {
+      const row = newText('li', '');
+      if (entry.at) row.append(newText('time', time.format(entry.at) + ' · Turn ' + entry.turn + (entry.action ? ' · ' + entry.action : '')));
+      row.append(newText('p', entry.intent));
+      if (entry.say) row.append(newText('p', '«' + entry.say + '»', 'reply'));
+      if (entry.proposal) row.append(detailSummary('Plan and usage', { plan: entry.proposal, usage: entry.usage, api_calls: entry.calls }));
+      return row;
+    });
+    renderDetails(s);
+  } catch {
+    put('connection', 'Dashboard connection lost');
+    el('connection').classList.remove('online');
+  } finally {
+    pending = false;
+  }
+}
+
+el('pause').addEventListener('click', () => {
+  paused = !paused;
+  el('pause').setAttribute('aria-pressed', String(paused));
+  put('pause', paused ? 'Resume updates' : 'Pause updates');
+  if (!paused) refresh();
+});
+el('runs').addEventListener('change', () => {
+  paused = false;
+  el('pause').setAttribute('aria-pressed', 'false');
+  put('pause', 'Pause updates');
+  refresh();
+});
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
